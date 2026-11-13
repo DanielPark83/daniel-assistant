@@ -80,7 +80,9 @@ npm test
 
 정적 파일만으로 동작하므로 GitHub Pages 등 HTTPS 정적 호스팅에 그대로 올리면 됩니다.
 
-- **GitHub Pages**: 저장소 **Settings → Pages**에서 Source를 *Deploy from a branch*로 두고 이 코드가 있는 브랜치의 `/ (root)`를 선택합니다.
+- **GitHub Pages**: 저장소 **Settings → Pages**에서 Source를 *Deploy from a branch*로 두고 이 코드가 있는 브랜치의 `/ (root)`를 선택한 뒤 Save를 누릅니다. 1~2분 뒤 `https://<사용자명>.github.io/<저장소명>/` 주소로 열립니다.
+  - 비공개 저장소의 Pages는 GitHub Pro 이상에서만 켤 수 있습니다. 무료 요금제라면 저장소를 공개로 바꾸거나 다른 정적 호스팅을 사용하세요.
+  - 저장소가 비공개여도 Pages 주소는 누구나 열 수 있습니다. 할 일·메모는 각 기기에만 저장되므로 노출되지 않습니다.
 - 배포된 주소를 휴대폰 브라우저로 연 뒤 **홈 화면에 추가**(iOS Safari: 공유 → 홈 화면에 추가 / Android Chrome: 메뉴 → 앱 설치)를 누르면 앱처럼 실행되고 오프라인에서도 열립니다.
 
 ## 구조
