@@ -295,7 +295,6 @@ function viewHome() {
       ${eventGroups.length ? eventGroups.map(([day, list]) => `
         <h3 class="group-title">${esc(formatRelative(day, t))}${diffDays(day, t) > 2 ? '' : ` · ${esc(formatShort(day))}`}</h3>
         <ul class="list">${list.map(eventRow).join('')}</ul>`).join('') : empty('앞으로 7일간 예정된 일정이 없습니다.')}
-      ${!s.settings.gcalClientId ? '<button class="btn btn-ghost" type="button" data-action="open-settings">Google Calendar 연결하기</button>' : ''}
     </section>
 
     ${s.briefingSeen === t ? briefingCard : ''}
@@ -406,7 +405,7 @@ function viewCalendar() {
 
   let gcalStatus;
   if (!s.settings.gcalClientId) {
-    gcalStatus = '<button class="btn btn-ghost" type="button" data-action="open-settings">Google Calendar 연결하기</button>';
+    gcalStatus = ''; // 연동을 설정하지 않았으면 안내를 띄우지 않는다
   } else if (gcal.isConnected()) {
     gcalStatus = `<button class="btn btn-ghost" type="button" data-action="gcal-sync">${icon('refresh')}Google 일정 새로고침</button>`;
   } else {
@@ -437,7 +436,7 @@ function viewCalendar() {
       ${dayTodos.length ? `<h3 class="group-title">할 일 마감</h3><ul class="list">${dayTodos.map((x) => todoRow(x, t)).join('')}</ul>` : ''}
     </section>
 
-    <section class="card card-flat">${gcalStatus}${fetched}</section>
+    ${gcalStatus || fetched ? `<section class="card card-flat">${gcalStatus}${fetched}</section>` : ''}
   `;
 }
 
