@@ -1,7 +1,6 @@
 // Daniel's 개인 비서 — 화면 렌더링과 사용자 상호작용
 
 import * as store from './store.js';
-import * as gcal from './gcal.js';
 import { parseQuickInput } from './nlp.js';
 import { buildBriefing, greeting } from './briefing.js';
 import { parseMarkdownTasks, exportMarkdown } from './markdown.js';
@@ -46,9 +45,7 @@ const ICONS = {
   right: '<path d="M9 18l6-6-6-6"/>',
   check: '<path d="M20 6L9 17l-5-5"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
-  mapPin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/>',
   copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
-  refresh: '<path d="M21 2v6h-6M3 22v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.9-3.4L21 8M3 16l2.6 2.4A9 9 0 0 0 20.5 15"/>',
   x: '<path d="M18 6L6 18M6 6l12 12"/>',
 };
 const icon = (name) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -134,7 +131,6 @@ function eventRow(ev) {
   const sub = [
     ev.endTime && ev.time ? `~ ${formatTime(ev.endTime)}` : '',
     ev.location ? ev.location : '',
-    ev.source === 'google' ? `Google${ev.calendar ? ` · ${ev.calendar}` : ''}` : '',
   ].filter(Boolean).join(' · ');
   return `
     <li class="row event">
@@ -403,16 +399,6 @@ function viewCalendar() {
   const dayTodos = s.todos.filter((x) => x.due === ui.calDay).sort(store.compareTodos);
   const [y, m] = ui.calMonth.split('-').map(Number);
 
-  let gcalStatus;
-  if (!s.settings.gcalClientId) {
-    gcalStatus = ''; // 연동을 설정하지 않았으면 안내를 띄우지 않는다
-  } else if (gcal.isConnected()) {
-    gcalStatus = `<button class="btn btn-ghost" type="button" data-action="gcal-sync">${icon('refresh')}Google 일정 새로고침</button>`;
-  } else {
-    gcalStatus = `<button class="btn btn-ghost" type="button" data-action="gcal-sync">${icon('refresh')}Google Calendar 다시 연결</button>`;
-  }
-  const fetched = s.gcal.fetchedAt ? `<p class="hint">Google 일정 ${s.gcal.events.length}건 · ${esc(new Date(s.gcal.fetchedAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' }))} 기준</p>` : '';
-
   return `
     <h2 class="page-title">캘린더</h2>
     <section class="card cal">
@@ -435,8 +421,6 @@ function viewCalendar() {
       ${dayEvents.length ? `<ul class="list">${dayEvents.map(eventRow).join('')}</ul>` : empty('일정이 없습니다.')}
       ${dayTodos.length ? `<h3 class="group-title">할 일 마감</h3><ul class="list">${dayTodos.map((x) => todoRow(x, t)).join('')}</ul>` : ''}
     </section>
-
-    ${gcalStatus || fetched ? `<section class="card card-flat">${gcalStatus}${fetched}</section>` : ''}
   `;
 }
 
@@ -635,26 +619,6 @@ function eventSheet(ev, date) {
     </form>`);
 }
 
-function googleEventSheet(ev) {
-  const when = ev.allDay
-    ? `${formatLong(ev.date)}${ev.endDate > ev.date ? ` ~ ${formatLong(ev.endDate)}` : ''} · 종일`
-    : `${formatLong(ev.date)} ${formatTime(ev.time)}${ev.endTime ? ` ~ ${formatTime(ev.endTime)}` : ''}`;
-  const safeLink = /^https:\/\/(www\.)?google\.com\/calendar\//.test(ev.link || '') ? ev.link : '';
-  openSheet(`
-    ${sheetHead(ev.title)}
-    <div class="form">
-      <p class="detail">${icon('clock')}${esc(when)}</p>
-      ${ev.location ? `<p class="detail">${icon('mapPin')}${esc(ev.location)}</p>` : ''}
-      <p class="detail">${icon('calendar')}Google Calendar${ev.calendar ? ` · ${esc(ev.calendar)}` : ''}</p>
-      <p class="hint">Google 일정은 읽기 전용입니다. 수정은 Google Calendar에서 해 주세요.</p>
-      <div class="form-actions">
-        <span class="spacer"></span>
-        ${safeLink ? `<a class="btn" href="${esc(safeLink)}" target="_blank" rel="noopener noreferrer">Google Calendar에서 열기</a>` : ''}
-        <button class="btn btn-primary" type="button" data-action="close-sheet">닫기</button>
-      </div>
-    </div>`);
-}
-
 function memoSheet(memo, preset) {
   const m = memo || { title: '', body: '', tags: [], pinned: false, ...preset };
   openSheet(`
@@ -675,7 +639,6 @@ function memoSheet(memo, preset) {
 
 function settingsSheet() {
   const s = store.getState();
-  gcal.preload().catch(() => {});
   openSheet(`
     ${sheetHead('설정')}
     <form class="form" data-form="settings">
@@ -685,25 +648,6 @@ function settingsSheet() {
           ${[['auto', '기기 설정 따르기'], ['light', '밝게'], ['dark', '어둡게']].map(([k, label]) => `<option value="${k}" ${s.settings.theme === k ? 'selected' : ''}>${label}</option>`).join('')}
         </select>
       </label>
-
-      <h3 class="group-title">Google Calendar</h3>
-      <label class="field"><span>OAuth 클라이언트 ID</span>
-        <input class="input" name="gcalClientId" placeholder="xxxxxxxx.apps.googleusercontent.com" value="${esc(s.settings.gcalClientId)}" autocapitalize="off" spellcheck="false">
-      </label>
-      <details class="help">
-        <summary>클라이언트 ID 만드는 방법</summary>
-        <ol>
-          <li>Google Cloud Console에서 프로젝트를 만들고 <b>Google Calendar API</b>를 사용 설정합니다.</li>
-          <li>OAuth 동의 화면을 만들고, 테스트 사용자에 본인 Google 계정을 추가합니다.</li>
-          <li>사용자 인증 정보에서 <b>OAuth 클라이언트 ID(웹 애플리케이션)</b>를 만들고, 승인된 JavaScript 원본에 <code>${esc(location.origin)}</code> 을 추가합니다.</li>
-          <li>발급된 클라이언트 ID를 위 칸에 붙여 넣고 저장한 뒤 연결합니다.</li>
-        </ol>
-        <p>일정은 읽기 전용으로 가져오며, 이 기기 밖으로 보내지 않습니다.</p>
-      </details>
-      <div class="btn-row">
-        <button class="btn" type="button" data-action="gcal-connect">${gcal.isConnected() ? '일정 새로고침' : '연결'}</button>
-        ${s.gcal.fetchedAt ? '<button class="btn" type="button" data-action="gcal-disconnect">연결 해제</button>' : ''}
-      </div>
 
       <h3 class="group-title">데이터</h3>
       <p class="hint">모든 데이터는 이 기기의 브라우저에만 저장됩니다. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 백업해 두세요.</p>
@@ -728,24 +672,6 @@ function settingsSheet() {
         <button class="btn btn-primary" type="submit">저장</button>
       </div>
     </form>`);
-}
-
-// ───────── Google Calendar ─────────
-
-async function syncGcal({ interactive }) {
-  const s = store.getState();
-  try {
-    if (!gcal.isConnected()) {
-      if (!interactive) return;
-      await gcal.connect(s.settings.gcalClientId);
-    }
-    const events = await gcal.fetchEvents();
-    store.setGcalEvents(events);
-    if (interactive) toast(`Google 일정 ${events.length}건을 불러왔습니다.`);
-  } catch (err) {
-    if (interactive) toast(err.message);
-    else console.warn(err);
-  }
 }
 
 // ───────── 예시 데이터 ─────────
@@ -773,8 +699,6 @@ function seedDemo() {
 }
 
 // ───────── 동작 ─────────
-
-const findEvent = (id) => store.allEvents(store.getState()).find((e) => e.id === id);
 
 const ACTIONS = {
   'open-settings': () => settingsSheet(),
@@ -824,28 +748,13 @@ const ACTIONS = {
   'cal-day': (el) => { ui.calDay = el.dataset.date; ui.calMonth = ui.calDay.slice(0, 7); render(); },
   'new-event': () => eventSheet(null, ui.calDay),
   'open-event': (el) => {
-    const ev = findEvent(el.dataset.id);
-    if (!ev) return;
-    if (ev.source === 'google') googleEventSheet(ev);
-    else eventSheet(store.getState().events.find((e) => e.id === ev.id));
+    const ev = store.getState().events.find((e) => e.id === el.dataset.id);
+    if (ev) eventSheet(ev);
   },
   'delete-event': (el) => {
     if (!confirm('이 일정을 삭제할까요?')) return;
     store.deleteEvent(el.closest('form').dataset.id);
     closeSheet();
-  },
-  'gcal-sync': () => syncGcal({ interactive: true }),
-  'gcal-connect': (el) => {
-    const form = el.closest('form');
-    const id = form.elements.gcalClientId.value.trim();
-    store.setSettings({ gcalClientId: id });
-    syncGcal({ interactive: true }).then(() => { if (sheet.open) settingsSheet(); });
-  },
-  'gcal-disconnect': () => {
-    gcal.disconnect();
-    store.clearGcal();
-    toast('Google Calendar 연결을 해제했습니다.');
-    settingsSheet();
   },
 
   'new-memo': () => memoSheet(null),
@@ -873,7 +782,7 @@ const ACTIONS = {
 
   'export-json': () => {
     const s = store.getState();
-    download(`개인비서-백업-${today()}.json`, JSON.stringify({ ...s, gcal: { events: [], fetchedAt: null } }, null, 2), 'application/json');
+    download(`개인비서-백업-${today()}.json`, JSON.stringify(s, null, 2), 'application/json');
   },
   'export-md': () => download(`개인비서-${today()}.md`, exportMarkdown(store.getState()), 'text/markdown'),
   'import-json': () => document.getElementById('import-file').click(),
@@ -887,7 +796,6 @@ const ACTIONS = {
   'seed-demo': () => { seedDemo(); closeSheet(); toast('예시 데이터를 넣었습니다.'); },
   'clear-all': () => {
     if (!confirm('할 일·일정·메모를 모두 삭제합니다. 되돌릴 수 없습니다. 계속할까요?')) return;
-    gcal.disconnect();
     store.clearAll();
     closeSheet();
     toast('모든 데이터를 삭제했습니다.');
@@ -983,7 +891,6 @@ const FORMS = {
     store.setSettings({
       name: f.name.value.trim() || 'Daniel',
       theme: f.theme.value,
-      gcalClientId: f.gcalClientId.value.trim(),
     });
     closeSheet();
     toast('설정을 저장했습니다.');
@@ -1060,9 +967,9 @@ store.init(localStore);
 store.subscribe(() => render());
 route();
 
-if (store.getState().settings.gcalClientId) {
-  gcal.preload().catch(() => {});
-  syncGcal({ interactive: false });
+// 브라우저가 저장 공간을 임의로 비우지 않도록 영구 저장을 요청한다.
+if (navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist().catch(() => {});
 }
 
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {

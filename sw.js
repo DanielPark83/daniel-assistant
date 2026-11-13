@@ -1,7 +1,7 @@
 // 서비스 워커: 앱 파일을 캐시해 오프라인에서도 열리게 한다.
 // 온라인일 때는 항상 최신 파일을 받아 캐시를 갱신한다(네트워크 우선).
 
-const CACHE = 'daniel-assistant-v1';
+const CACHE = 'daniel-assistant-v2';
 const SHELL = [
   './',
   'index.html',
@@ -12,7 +12,6 @@ const SHELL = [
   'js/dates.js',
   'js/briefing.js',
   'js/markdown.js',
-  'js/gcal.js',
   'manifest.webmanifest',
   'icons/icon.svg',
   'icons/icon-192.png',
@@ -34,7 +33,7 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
-  // 같은 출처의 GET 요청만 다룬다 (Google API 등 외부 요청은 건드리지 않는다)
+  // 같은 출처의 GET 요청만 다룬다
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   event.respondWith(
     fetch(req)

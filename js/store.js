@@ -10,11 +10,10 @@ export const BRIEFING_TAG = '브리핑';
 export function defaultState() {
   return {
     version: 1,
-    settings: { name: 'Daniel', theme: 'auto', gcalClientId: '' },
+    settings: { name: 'Daniel', theme: 'auto' },
     todos: [],
     events: [],
     memos: [],
-    gcal: { events: [], fetchedAt: null },
     briefingSeen: null,
   };
 }
@@ -51,7 +50,6 @@ export function normalize(data) {
     settings: { ...base.settings, ...(data.settings && typeof data.settings === 'object' ? {
       name: str(data.settings.name, 'Daniel') || 'Daniel',
       theme: ['auto', 'light', 'dark'].includes(data.settings.theme) ? data.settings.theme : 'auto',
-      gcalClientId: str(data.settings.gcalClientId),
     } : {}) },
     todos: arr(data.todos).map((t) => ({
       id: str(t.id) || uid(),
@@ -86,10 +84,6 @@ export function normalize(data) {
       createdAt: str(m.createdAt) || new Date().toISOString(),
       updatedAt: str(m.updatedAt) || new Date().toISOString(),
     })),
-    gcal: {
-      events: arr(data.gcal && data.gcal.events).filter((e) => isoOrNull(e.date)),
-      fetchedAt: str(data.gcal && data.gcal.fetchedAt) || null,
-    },
     briefingSeen: isoOrNull(data.briefingSeen),
   };
 }
@@ -203,16 +197,6 @@ export function deleteEvent(id) {
   commit();
 }
 
-export function setGcalEvents(events) {
-  state.gcal = { events, fetchedAt: new Date().toISOString() };
-  commit();
-}
-
-export function clearGcal() {
-  state.gcal = { events: [], fetchedAt: null };
-  commit();
-}
-
 // ───────── 메모 ─────────
 
 export function addMemo(fields) {
@@ -292,11 +276,9 @@ export function todosDoneOn(s, iso) {
   return s.todos.filter((t) => t.done && t.doneAt && toISODate(new Date(t.doneAt)) === iso);
 }
 
-// 로컬 일정과 Google 일정을 같은 형태로 합친다.
+// 일정을 조회용 형태로 맞춘다.
 export function allEvents(s) {
-  const local = s.events.map((e) => ({ ...e, endDate: e.date, allDay: !e.time, source: 'local' }));
-  const google = s.gcal.events.map((e) => ({ ...e, endDate: e.endDate || e.date, source: 'google' }));
-  return [...local, ...google];
+  return s.events.map((e) => ({ ...e, endDate: e.date, allDay: !e.time }));
 }
 
 export function compareEvents(a, b) {

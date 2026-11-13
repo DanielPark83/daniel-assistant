@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import * as store from '../js/store.js';
 import { buildBriefing } from '../js/briefing.js';
 import { parseMarkdownTasks, exportMarkdown, todoToMarkdown } from '../js/markdown.js';
-import { normalizeEvent } from '../js/gcal.js';
 
 // 기준 시각: 2026-11-13(금) 10:00
 const NOW = new Date(2026, 10, 13, 10, 0);
@@ -81,11 +80,12 @@ test('중요 알림: 지연, 중요 마감, 곧 시작하는 일정', () => {
   ]);
 });
 
-test('여러 날에 걸친 Google 일정이 날짜별로 조회된다', () => {
-  store.setGcalEvents([{ id: 'g:1', title: '출장', date: '2026-11-12', endDate: '2026-11-14', allDay: true }]);
+test('날짜별 일정 조회', () => {
   store.addEvent({ title: '점심', date: '2026-11-13', time: '12:00' });
+  store.addEvent({ title: '종일 워크숍', date: '2026-11-13' });
+  store.addEvent({ title: '치과', date: '2026-11-16', time: '18:30' });
   const s = store.getState();
-  assert.deepEqual(store.eventsOn(s, '2026-11-13').map((e) => e.title), ['출장', '점심']);
+  assert.deepEqual(store.eventsOn(s, '2026-11-13').map((e) => e.title), ['종일 워크숍', '점심']);
   assert.deepEqual(store.eventsOn(s, '2026-11-15').map((e) => e.title), []);
   assert.equal(store.eventsBetween(s, '2026-11-14', '2026-11-20').length, 1);
 });
@@ -149,15 +149,4 @@ test('손상된 백업 데이터는 안전한 형태로 맞춘다', () => {
   assert.equal(s.events[0].time, null);
   assert.deepEqual([s.settings.theme, s.settings.name], ['auto', 'Daniel']);
   assert.deepEqual(store.normalize(null).todos, []);
-});
-
-test('Google 일정 변환', () => {
-  const cal = { id: 'primary', summary: '개인' };
-  const allDay = normalizeEvent({ id: 'a', summary: '출장', start: { date: '2026-11-12' }, end: { date: '2026-11-15' } }, cal);
-  assert.deepEqual([allDay.date, allDay.endDate, allDay.allDay, allDay.time], ['2026-11-12', '2026-11-14', true, null]);
-  const timed = normalizeEvent({
-    id: 'b', start: { dateTime: new Date(2026, 10, 13, 14, 30).toISOString() }, end: { dateTime: new Date(2026, 10, 13, 15, 0).toISOString() },
-  }, cal);
-  assert.deepEqual([timed.title, timed.date, timed.time, timed.endTime, timed.allDay], ['(제목 없음)', '2026-11-13', '14:30', '15:00', false]);
-  assert.equal(normalizeEvent({ id: 'c', status: 'cancelled', start: { date: '2026-11-12' } }, cal), null);
 });
