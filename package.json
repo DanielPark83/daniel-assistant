@@ -1,0 +1,11 @@
+{
+  "name": "daniels-personal-assistant",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Daniel's 개인 비서 — 일정·할 일·메모·브리핑 통합 대시보드 (PWA)",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node --test"
+  }
+}
