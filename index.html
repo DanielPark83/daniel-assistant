@@ -19,9 +19,14 @@
 <body>
   <header class="appbar">
     <h1 class="appbar-title">Daniel's 개인 비서</h1>
+    <span class="appbar-actions">
+    <button class="icon-btn sync-indicator" id="sync-indicator" type="button" data-action="open-settings" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+    </button>
     <button class="icon-btn" type="button" data-action="open-settings" aria-label="설정">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
     </button>
+    </span>
   </header>
 
   <main id="view" tabindex="-1"></main>

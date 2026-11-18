@@ -1,6 +1,9 @@
 // Daniel's 개인 비서 — 화면 렌더링과 사용자 상호작용
 
 import * as store from './store.js';
+import * as sync from './sync.js';
+import * as push from './push.js';
+import { qrSvg, startScanner } from './qr.js';
 import { parseQuickInput } from './nlp.js';
 import { buildBriefing, greeting } from './briefing.js';
 import { parseMarkdownTasks, exportMarkdown } from './markdown.js';
@@ -18,6 +21,12 @@ const sheet = document.getElementById('sheet');
 const toastEl = document.getElementById('toast');
 
 const ui = {
+  syncBusy: false,
+  pushBusy: false,
+  repoChoices: null, // 토큰으로 쓸 수 있는 저장소가 여러 개일 때 고르는 목록
+  pendingToken: '',
+  showQr: false,
+  stopScanner: null,
   tab: 'home',
   quickMode: 'todo',
   todoScope: 'open',
@@ -45,6 +54,9 @@ const ICONS = {
   right: '<path d="M9 18l6-6-6-6"/>',
   check: '<path d="M20 6L9 17l-5-5"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  cloud: '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>',
+  bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+  qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 17h4v4h-4"/>',
   copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   x: '<path d="M18 6L6 18M6 6l12 12"/>',
 };
@@ -493,7 +505,7 @@ function viewBriefing() {
       ${brief.sections.map((sec) => `
         <h3 class="group-title">${esc(sec.title)}</h3>
         ${sec.items.length
-    ? `<ul class="bullets">${sec.items.map((i) => `<li>${sec.memoId ? `<button class="link" type="button" data-action="edit-memo" data-id="${esc(sec.memoId)}">${esc(i)}</button>` : esc(i)}</li>`).join('')}</ul>`
+    ? `<ul class="bullets">${sec.items.map((i) => `<li>${sec.memoId ? `<button class="link" type="button" data-action="edit-memo" data-id="${esc(sec.memoId)}">${esc(i)}</button>` : esc(i)}</li>`).join('')}${sec.more ? `<li class="muted">외 ${sec.more}건</li>` : ''}</ul>`
     : `<p class="empty">${esc(sec.empty)}</p>`}`).join('')}
     </section>
 
@@ -517,11 +529,37 @@ function viewBriefing() {
 
 // ───────── 렌더 ─────────
 
+function renderSyncIndicator() {
+  const el = document.getElementById('sync-indicator');
+  if (!el) return;
+  const st = sync.getStatus();
+  el.hidden = st.state === 'off';
+  el.dataset.state = st.state;
+  const label = { idle: '동기화됨', syncing: '동기화 중', error: `동기화 오류: ${st.error || ''}`, offline: '오프라인' }[st.state] || '';
+  el.setAttribute('aria-label', label);
+  el.title = label;
+}
+
 const VIEWS = { home: viewHome, todos: viewTodos, calendar: viewCalendar, memos: viewMemos, briefing: viewBriefing };
 
 function render() {
+  pendingRender = false;
   const s = store.getState();
+  // 빠른 입력창에 쓰던 글과 커서 위치는 다시 그려도 유지한다
+  const q = view.querySelector('[data-form="quick"] input');
+  const keep = q && q.value ? { value: q.value, focused: document.activeElement === q, start: q.selectionStart, end: q.selectionEnd } : null;
   view.innerHTML = VIEWS[ui.tab]();
+  if (keep) {
+    const n = view.querySelector('[data-form="quick"] input');
+    if (n) {
+      n.value = keep.value;
+      quickPreview(n.form);
+      if (keep.focused) {
+        n.focus();
+        try { n.setSelectionRange(keep.start, keep.end); } catch { /* 무시 */ }
+      }
+    }
+  }
   document.querySelectorAll('.tab').forEach((el) => {
     const on = el.dataset.tab === ui.tab;
     el.classList.toggle('is-on', on);
@@ -533,7 +571,17 @@ function render() {
   else document.documentElement.dataset.theme = theme;
 }
 
+// 연결 링크(#connect=…)로 열렸으면 주소에서 토큰을 지우고 연결을 묻는다
+function takeConnectHash() {
+  if (!location.hash.startsWith('#connect=')) return false;
+  const payload = location.hash;
+  history.replaceState(null, '', `${location.pathname}${location.search}#home`);
+  setTimeout(() => connectFromPayload(payload), 300);
+  return true;
+}
+
 function route() {
+  takeConnectHash();
   const tab = location.hash.slice(1);
   ui.tab = TABS.includes(tab) ? tab : 'home';
   if (ui.tab === 'briefing') store.markBriefingSeen(today());
@@ -649,8 +697,16 @@ function settingsSheet() {
         </select>
       </label>
 
+      <h3 class="group-title">기기 간 동기화</h3>
+      <div id="sync-panel" class="panel">${syncPanelHtml()}</div>
+
+      <h3 class="group-title">아침 브리핑 알림</h3>
+      <div id="push-panel" class="panel">${pushPanelHtml()}</div>
+
       <h3 class="group-title">데이터</h3>
-      <p class="hint">모든 데이터는 이 기기의 브라우저에만 저장됩니다. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 백업해 두세요.</p>
+      <p class="hint">${sync.isConnected()
+    ? '데이터는 이 기기와 연결된 GitHub 저장소에 함께 저장됩니다. 그래도 가끔 백업 파일을 받아 두면 안전합니다.'
+    : '동기화를 연결하지 않으면 데이터는 이 기기의 브라우저에만 저장됩니다. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 백업해 두세요.'}</p>
       <div class="btn-row">
         <button class="btn" type="button" data-action="export-json">백업 내보내기</button>
         <button class="btn" type="button" data-action="import-json">백업 가져오기</button>
@@ -671,7 +727,201 @@ function settingsSheet() {
         <button class="btn" type="button" data-action="close-sheet">닫기</button>
         <button class="btn btn-primary" type="submit">저장</button>
       </div>
-    </form>`);
+    </form>
+    <form id="sync-connect-form" data-form="sync-connect" hidden></form>`);
+}
+
+// ───────── 동기화·알림 패널 ─────────
+
+const TOKEN_URL = 'https://github.com/settings/personal-access-tokens/new?name=daniel-assistant-sync&description=Daniel%27s%20%EA%B0%9C%EC%9D%B8%20%EB%B9%84%EC%84%9C%20%EB%8F%99%EA%B8%B0%ED%99%94&contents=write';
+
+function syncStatusLine() {
+  const st = sync.getStatus();
+  const c = sync.getConfig();
+  const when = st.lastSyncAt
+    ? new Date(st.lastSyncAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : '';
+  if (st.state === 'syncing') return { cls: 'is-busy', text: '동기화 중…' };
+  if (st.state === 'error') return { cls: 'is-error', text: st.error || '동기화 오류' };
+  if (st.state === 'offline') return { cls: 'is-warn', text: `오프라인 — 연결되면 자동으로 동기화합니다${when ? ` (마지막 ${when})` : ''}` };
+  return { cls: 'is-ok', text: `${c.owner}/${c.repo}${when ? ` · 마지막 동기화 ${when}` : ''}` };
+}
+
+function syncPanelHtml() {
+  if (ui.stopScanner) {
+    return `
+      <p class="hint">다른 기기(PC)의 설정 화면에 띄운 QR 코드를 비춰 주세요.</p>
+      <video class="scanner" playsinline muted></video>
+      <div class="btn-row"><button class="btn" type="button" data-action="sync-scan-cancel">취소</button></div>`;
+  }
+  if (sync.isConnected()) {
+    const line = syncStatusLine();
+    return `
+      <p class="sync-status ${line.cls}">${icon(line.cls === 'is-error' ? 'alert' : 'cloud')}<span>${esc(line.text)}</span></p>
+      <div class="btn-row">
+        <button class="btn" type="button" data-action="sync-now" ${ui.syncBusy ? 'disabled' : ''}>지금 동기화</button>
+        <button class="btn" type="button" data-action="sync-show-qr" aria-expanded="${ui.showQr}">${icon('qr')}다른 기기 연결</button>
+        <button class="btn btn-danger" type="button" data-action="sync-disconnect">연결 해제</button>
+      </div>
+      ${ui.showQr ? `
+        <div class="qr-box" id="qr-box"><p class="hint">QR 코드를 만드는 중…</p></div>
+        <p class="hint">다른 기기에서 이 앱을 열고 <b>설정 → 기기 간 동기화 → QR 코드로 연결</b>을 눌러 이 화면을 비추세요. QR 코드에는 GitHub 토큰이 들어 있으니 다른 사람에게 보여 주지 마세요.</p>
+        <div class="btn-row"><button class="btn btn-small" type="button" data-action="sync-copy-link">${icon('copy')}연결 링크 복사</button></div>` : ''}`;
+  }
+  if (ui.repoChoices) {
+    return `
+      <p class="hint">이 토큰으로 쓸 수 있는 비공개 저장소가 여러 개입니다. 데이터를 저장할 저장소를 고르세요.</p>
+      <div class="choices">
+        ${ui.repoChoices.map((r, i) => `
+          <label class="check-field"><input type="radio" name="syncRepo" value="${i}" form="sync-connect-form" ${i === 0 ? 'checked' : ''}><span>${esc(r.fullName)}</span></label>`).join('')}
+      </div>
+      <div class="btn-row">
+        <button class="btn" type="button" data-action="sync-cancel-choice">취소</button>
+        <button class="btn btn-primary" type="submit" form="sync-connect-form" ${ui.syncBusy ? 'disabled' : ''}>이 저장소로 연결</button>
+      </div>`;
+  }
+  return `
+    <p class="hint">PC와 폰이 같은 할 일·일정·메모를 보도록, 데이터를 본인의 GitHub <b>비공개</b> 저장소에 저장합니다.
+      처음 한 기기(PC 권장)에서 토큰으로 연결하고, 나머지 기기는 그 화면의 QR 코드를 찍으면 됩니다.</p>
+    <div class="btn-row"><button class="btn" type="button" data-action="sync-scan">${icon('qr')}QR 코드로 연결</button></div>
+    <label class="field"><span>또는 GitHub 토큰 붙여 넣기</span>
+      <input class="input" name="syncToken" type="password" form="sync-connect-form" placeholder="github_pat_…" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </label>
+    <details class="help">
+      <summary>토큰 만드는 방법 (PC에서 한 번만)</summary>
+      <ol>
+        <li><a href="${TOKEN_URL}" target="_blank" rel="noopener noreferrer">GitHub 토큰 만들기 화면</a>을 엽니다.</li>
+        <li><b>Expiration</b>은 길게(예: 1년) 정합니다. 만료되면 새 토큰으로 다시 연결해야 합니다.</li>
+        <li><b>Repository access</b>에서 <b>Only select repositories</b>를 고르고, 데이터를 둘 <b>비공개 저장소 하나</b>만 선택합니다.</li>
+        <li><b>Permissions</b>에서 <b>Contents</b>를 <b>Read and write</b>로 정합니다. 다른 권한은 필요 없습니다.</li>
+        <li><b>Generate token</b>을 누르고 나온 토큰을 복사해 위 칸에 붙여 넣습니다.</li>
+      </ol>
+      <p>토큰은 이 기기에만 저장되고, 데이터 파일에는 들어가지 않습니다.</p>
+    </details>
+    <div class="btn-row"><button class="btn btn-primary" type="submit" form="sync-connect-form" ${ui.syncBusy ? 'disabled' : ''}>${ui.syncBusy ? '확인 중…' : '연결'}</button></div>`;
+}
+
+function pushPanelHtml() {
+  const intro = '<p class="hint">매일 오전 8시쯤 오늘 할 일·미완료 업무·메모 요약을 알림으로 보내 드립니다. 알림을 누르면 브리핑 화면이 열립니다.</p>';
+  if (!sync.isConnected()) return `${intro}<p class="hint">기기 간 동기화를 먼저 연결해야 켤 수 있습니다.</p>`;
+  const reason = push.unsupportedReason();
+  const devices = push.receivingDevices();
+  const others = devices.filter((d) => !d.here).map((d) => d.label);
+  const list = devices.length
+    ? `<p class="hint">알림 받는 기기: ${esc(devices.map((d) => (d.here ? `${d.label}(이 기기)` : d.label)).join(', '))}</p>` : '';
+  if (reason) return `${intro}<p class="hint">${esc(reason)}</p>${list}`;
+  const on = push.isEnabledHere();
+  return `
+    ${intro}
+    <p class="sync-status ${on ? 'is-ok' : ''}">${icon('bell')}<span>이 기기: ${on ? '켜짐' : '꺼짐'}${!on && others.length ? ` · ${esc(others.join(', '))}에서 받는 중` : ''}</span></p>
+    <div class="btn-row">
+      ${on
+    ? `<button class="btn" type="button" data-action="push-disable" ${ui.pushBusy ? 'disabled' : ''}>이 기기 알림 끄기</button>`
+    : `<button class="btn btn-primary" type="button" data-action="push-enable" ${ui.pushBusy ? 'disabled' : ''}>${ui.pushBusy ? '켜는 중…' : '이 기기에서 알림 받기'}</button>`}
+      <button class="btn" type="button" data-action="push-test">지금 브리핑 알림 보기</button>
+    </div>
+    ${list}`;
+}
+
+function refreshPanels() {
+  if (!sheet.open) return;
+  const sp = document.getElementById('sync-panel');
+  const pp = document.getElementById('push-panel');
+  // 입력 중인 토큰이나 카메라 화면은 그대로 둔다
+  const typing = sp && sp.contains(document.activeElement) && document.activeElement.tagName === 'INPUT';
+  if (sp && !typing && !ui.stopScanner) sp.innerHTML = syncPanelHtml();
+  if (pp) pp.innerHTML = pushPanelHtml();
+  if (ui.showQr && sync.isConnected()) renderQr();
+}
+
+async function renderQr() {
+  const box = document.getElementById('qr-box');
+  if (!box || box.dataset.ready) return;
+  box.dataset.ready = '1';
+  try {
+    box.innerHTML = await qrSvg(sync.makeConnectLink(appUrl()));
+  } catch (err) {
+    box.innerHTML = `<p class="hint">${esc(err.message)}</p>`;
+  }
+}
+
+const appUrl = () => `${location.origin}${location.pathname}`;
+
+async function connectWith(cfg) {
+  ui.syncBusy = true;
+  refreshPanels();
+  try {
+    await sync.connect(cfg);
+    ui.repoChoices = null;
+    ui.pendingToken = '';
+    toast(`${cfg.owner}/${cfg.repo} 저장소와 동기화를 연결했습니다.`);
+    await push.reconcile();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    ui.syncBusy = false;
+    refreshPanels();
+    render();
+  }
+}
+
+async function connectWithToken(token) {
+  ui.syncBusy = true;
+  refreshPanels();
+  let repos;
+  try {
+    repos = await sync.listRepos(token);
+  } catch (err) {
+    ui.syncBusy = false;
+    refreshPanels();
+    toast(err.message);
+    return;
+  }
+  ui.syncBusy = false;
+  if (!repos.length) {
+    refreshPanels();
+    toast('이 토큰으로 쓸 수 있는 비공개 저장소가 없습니다. 토큰을 만들 때 비공개 저장소를 선택했는지 확인해 주세요.');
+    return;
+  }
+  if (repos.length === 1) { await connectWith({ token, ...repos[0] }); return; }
+  ui.pendingToken = token;
+  ui.repoChoices = repos;
+  refreshPanels();
+}
+
+// QR 코드나 링크로 받은 연결 정보 사용
+async function connectFromPayload(text) {
+  const cfg = sync.parseConnectPayload(text);
+  if (!cfg) { toast('이 앱의 연결용 QR 코드가 아닙니다.'); return; }
+  if (sync.isConnected()) {
+    const c = sync.getConfig();
+    if (c.owner === cfg.owner && c.repo === cfg.repo) { toast('이미 이 저장소와 연결되어 있습니다.'); return; }
+  }
+  if (!confirm(`GitHub 저장소 ${cfg.owner}/${cfg.repo}와 동기화를 연결할까요?\n이 기기의 데이터와 저장소의 데이터가 합쳐집니다.`)) return;
+  await connectWith(cfg);
+}
+
+async function startScan() {
+  ui.stopScanner = () => {};
+  const sp = document.getElementById('sync-panel');
+  if (sp) sp.innerHTML = syncPanelHtml();
+  const video = sp && sp.querySelector('video');
+  try {
+    ui.stopScanner = await startScanner(video, (text) => {
+      ui.stopScanner = null;
+      refreshPanels();
+      connectFromPayload(text);
+    }, (err) => { ui.stopScanner = null; refreshPanels(); toast(err.message); });
+  } catch (err) {
+    ui.stopScanner = null;
+    refreshPanels();
+    toast(err.message);
+  }
+}
+
+function stopScan() {
+  if (ui.stopScanner) ui.stopScanner();
+  ui.stopScanner = null;
 }
 
 // ───────── 예시 데이터 ─────────
@@ -782,7 +1032,8 @@ const ACTIONS = {
 
   'export-json': () => {
     const s = store.getState();
-    download(`개인비서-백업-${today()}.json`, JSON.stringify(s, null, 2), 'application/json');
+    const backup = { version: 1, settings: s.settings, todos: s.todos, events: s.events, memos: s.memos };
+    download(`개인비서-백업-${today()}.json`, JSON.stringify(backup, null, 2), 'application/json');
   },
   'export-md': () => download(`개인비서-${today()}.md`, exportMarkdown(store.getState()), 'text/markdown'),
   'import-json': () => document.getElementById('import-file').click(),
@@ -793,9 +1044,66 @@ const ACTIONS = {
     el.closest('form').elements.markdown.value = '';
     toast(`할 일 ${todos.length}건을 가져왔습니다.`);
   },
+  'sync-scan': () => startScan(),
+  'sync-scan-cancel': () => { stopScan(); refreshPanels(); },
+  'sync-cancel-choice': () => { ui.repoChoices = null; ui.pendingToken = ''; refreshPanels(); },
+  'sync-now': async () => {
+    await sync.syncNow();
+    await push.reconcile();
+    const st = sync.getStatus();
+    toast(st.state === 'idle' ? '동기화했습니다.' : st.error || '동기화하지 못했습니다.');
+  },
+  'sync-show-qr': () => { ui.showQr = !ui.showQr; refreshPanels(); },
+  'sync-copy-link': async () => {
+    try {
+      await navigator.clipboard.writeText(sync.makeConnectLink(appUrl()));
+      toast('연결 링크를 복사했습니다. 토큰이 들어 있으니 본인에게만 보내세요.');
+    } catch {
+      toast('복사하지 못했습니다.');
+    }
+  },
+  'sync-disconnect': async () => {
+    if (!confirm('이 기기의 동기화를 해제할까요?\n이 기기의 데이터는 그대로 남고, 다른 기기와 더 이상 맞춰지지 않습니다. 이 기기의 아침 알림도 꺼집니다.')) return;
+    if (push.isEnabledHere()) await push.disable().catch(() => {});
+    sync.disconnect();
+    ui.showQr = false;
+    refreshPanels();
+    render();
+    toast('동기화를 해제했습니다.');
+  },
+  'push-enable': async () => {
+    ui.pushBusy = true;
+    refreshPanels();
+    try {
+      await push.enable();
+      toast('이 기기에서 매일 아침 브리핑 알림을 받습니다.');
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      ui.pushBusy = false;
+      refreshPanels();
+    }
+  },
+  'push-disable': async () => {
+    ui.pushBusy = true;
+    refreshPanels();
+    try {
+      await push.disable();
+      toast('이 기기의 아침 알림을 껐습니다.');
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      ui.pushBusy = false;
+      refreshPanels();
+    }
+  },
+  'push-test': async () => {
+    try { await push.testNotification(); } catch (err) { toast(err.message); }
+  },
   'seed-demo': () => { seedDemo(); closeSheet(); toast('예시 데이터를 넣었습니다.'); },
   'clear-all': () => {
-    if (!confirm('할 일·일정·메모를 모두 삭제합니다. 되돌릴 수 없습니다. 계속할까요?')) return;
+    const where = sync.isConnected() ? '\n동기화 중이라 연결된 모든 기기에서 함께 지워집니다.' : '';
+    if (!confirm(`할 일·일정·메모를 모두 삭제합니다. 되돌릴 수 없습니다.${where}\n계속할까요?`)) return;
     store.clearAll();
     closeSheet();
     toast('모든 데이터를 삭제했습니다.');
@@ -807,17 +1115,18 @@ const FORMS = {
     const input = form.elements.text;
     const text = input.value.trim();
     if (!text) { input.focus(); return; }
+    input.value = '';
     const mode = form.dataset.mode;
     const t = today();
     if (mode === 'memo') {
       const tags = [];
       const body = text.replace(/(^|\s)#([^\s#]+)/g, (m, sp, tag) => { tags.push(tag); return sp; }).replace(/\s+/g, ' ').trim();
-      if (!body) { toast('메모 내용을 입력해 주세요.'); return; }
+      if (!body) { input.value = text; toast('메모 내용을 입력해 주세요.'); return; }
       store.addMemo(body.length > 40 ? { title: `${body.slice(0, 40)}…`, body, tags } : { title: body, tags });
       toast('메모를 저장했습니다.');
     } else {
       const p = parseQuickInput(text);
-      if (!p.title) { toast('제목이 될 내용을 함께 적어 주세요.'); return; }
+      if (!p.title) { input.value = text; toast('제목이 될 내용을 함께 적어 주세요.'); return; }
       if (mode === 'event') {
         const date = p.due || t;
         store.addEvent({ title: p.title, date, time: p.time });
@@ -886,6 +1195,22 @@ const FORMS = {
     closeSheet();
   },
 
+  'sync-connect': (form) => {
+    if (ui.repoChoices) {
+      const picked = form.elements.syncRepo;
+      const idx = Number(picked && picked.value !== undefined ? picked.value : 0);
+      connectWith({ token: ui.pendingToken, ...ui.repoChoices[idx] || ui.repoChoices[0] });
+      return;
+    }
+    const input = form.elements.syncToken;
+    const token = input ? input.value.trim() : '';
+    if (!token) { toast('GitHub 토큰을 붙여 넣어 주세요.'); if (input) input.focus(); return; }
+    // 연결 링크를 통째로 붙여 넣은 경우
+    if (/#connect=/.test(token)) { connectFromPayload(token); return; }
+    if (!/^[\w-]{20,255}$/.test(token)) { toast('토큰 형식이 아닙니다. github_pat_ 으로 시작하는 값을 그대로 붙여 넣어 주세요.'); return; }
+    connectWithToken(token);
+  },
+
   settings: (form) => {
     const f = form.elements;
     store.setSettings({
@@ -940,16 +1265,32 @@ document.addEventListener('change', (e) => {
   }).catch(() => toast('백업 파일을 읽지 못했습니다. 이 앱에서 내보낸 JSON 파일인지 확인해 주세요.'));
 });
 
-sheet.addEventListener('close', () => { sheet.innerHTML = ''; });
+sheet.addEventListener('close', () => {
+  stopScan();
+  ui.showQr = false;
+  ui.repoChoices = null;
+  ui.pendingToken = '';
+  sheet.innerHTML = '';
+  if (pendingRender) render();
+});
 
 window.addEventListener('hashchange', route);
 
 // 날짜가 바뀌거나 알림 시각이 지나도 화면이 맞도록 주기적으로 다시 그린다.
+let pendingRender = false;
 function refreshIfIdle() {
   const active = document.activeElement;
   const typing = active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
   if (!sheet.open && !typing) render();
+  else pendingRender = true;
 }
+// 입력을 마치면 미뤄 둔 화면 갱신을 한다
+document.addEventListener('focusout', () => {
+  setTimeout(() => {
+    const a = document.activeElement;
+    if (pendingRender && !sheet.open && !(a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName))) render();
+  }, 0);
+});
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshIfIdle(); });
 setInterval(() => { if (!document.hidden && ui.tab === 'home') refreshIfIdle(); }, 60000);
 
@@ -964,8 +1305,30 @@ try {
   setTimeout(() => toast('이 브라우저에서는 저장소를 쓸 수 없어 데이터가 유지되지 않습니다.'), 500);
 }
 store.init(localStore);
-store.subscribe(() => render());
+sync.init(localStore);
+// 다른 기기에서 온 변경은 입력 중이 아닐 때 화면에 반영한다
+store.subscribe((_, meta) => {
+  if (meta.remote) refreshIfIdle(); else render();
+  refreshPanels();
+});
+sync.onStatus(() => { refreshPanels(); renderSyncIndicator(); });
+
 route();
+renderSyncIndicator();
+sync.start();
+if (sync.isConnected()) {
+  // 첫 동기화가 끝나면 알림 구독 상태를 맞춘다
+  const off = sync.onStatus((st) => { if (st.state === 'idle') { off(); push.reconcile(); } });
+}
+
+// 알림을 눌러 앱이 열려 있을 때는 서비스 워커가 보낸 주소로 이동한다
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'open' && typeof e.data.hash === 'string' && /^#\w+$/.test(e.data.hash)) {
+      location.hash = e.data.hash;
+    }
+  });
+}
 
 // 브라우저가 저장 공간을 임의로 비우지 않도록 영구 저장을 요청한다.
 if (navigator.storage && navigator.storage.persist) {

@@ -16,6 +16,14 @@ export function greeting(now = new Date()) {
 }
 
 const eventLine = (e) => `${e.allDay || !e.time ? '종일' : formatTime(e.time)} ${e.title}${e.location ? ` · ${e.location}` : ''}`;
+// 메모 한 줄 요약: 제목 — 본문 첫 줄(제목과 다를 때)
+function memoLine(m) {
+  const title = m.title || '(제목 없음)';
+  const first = (m.body || '').split('\n').map((l) => l.trim()).filter(Boolean)[0] || '';
+  const snippet = first && !title.startsWith(first.slice(0, 20)) ? first : '';
+  return snippet ? `${title} — ${snippet.length > 60 ? `${snippet.slice(0, 60)}…` : snippet}` : title;
+}
+
 const todoLine = (t) => `${t.title}${t.time ? ` (${formatTime(t.time)})` : ''}${t.priority === 'high' ? ' · 중요' : ''}`;
 
 export function buildBriefing(state, now = new Date()) {
@@ -30,6 +38,14 @@ export function buildBriefing(state, now = new Date()) {
     .sort(compareTodos);
   const upcomingEvents = eventsBetween(state, addDays(t, 1), addDays(t, 3)).filter((e) => e.date > t);
   const noDate = state.todos.filter((x) => !x.done && !x.due);
+  // 최근 24시간 안에 쓰거나 고친 메모(기술 브리핑 제외), 없으면 고정 메모
+  const since = new Date(now.getTime() - 86400000).toISOString();
+  const plainMemos = state.memos.filter((m) => !m.tags.includes(BRIEFING_TAG));
+  const recentMemos = plainMemos.filter((m) => m.updatedAt >= since)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const memoPick = recentMemos.length
+    ? { title: '최근 메모', list: recentMemos }
+    : { title: '고정 메모', list: plainMemos.filter((m) => m.pinned).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
   const techBrief = state.memos
     .filter((m) => m.tags.includes(BRIEFING_TAG))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] || null;
@@ -66,6 +82,13 @@ export function buildBriefing(state, now = new Date()) {
   if (doneYesterday.length) {
     sections.push({ key: 'done', title: '어제 완료', items: doneYesterday.map((x) => x.title) });
   }
+  if (memoPick.list.length) {
+    sections.push({
+      key: 'memos', title: memoPick.title,
+      items: memoPick.list.slice(0, 5).map(memoLine),
+      more: Math.max(0, memoPick.list.length - 5),
+    });
+  }
   if (techBrief) {
     const firstLine = techBrief.body.split('\n').map((l) => l.trim()).filter(Boolean)[0] || '';
     sections.push({
@@ -78,6 +101,7 @@ export function buildBriefing(state, now = new Date()) {
   sections.forEach((sec) => {
     md.push(`## ${sec.title}`);
     if (sec.items.length) sec.items.forEach((i) => md.push(`- ${i}`));
+    if (sec.more) md.push(`- 외 ${sec.more}건`);
     else md.push(`- ${sec.empty}`);
     md.push('');
   });
@@ -93,6 +117,45 @@ export function buildBriefing(state, now = new Date()) {
       overdue: overdue.length,
       todayEvents: todayEvents.length,
       noDate: noDate.length,
+      memos: memoPick.list.length,
     },
+    memoTitle: memoPick.title,
+  };
+}
+
+// 아침 알림 한 건: 제목과 몇 줄짜리 본문. 누르면 앱의 브리핑 화면이 열린다.
+export function buildMorningPush(state, now = new Date()) {
+  const b = buildBriefing(state, now);
+  const t = b.date;
+  const todayTodos = todosDueOn(state, t);
+  const overdue = overdueTodos(state, t);
+  const memoSec = b.sections.find((x) => x.key === 'memos');
+
+  const lines = [];
+  const summary = [`오늘 할 일 ${b.stats.todayTodos}건`];
+  if (b.stats.overdue) summary.push(`미완료 ${b.stats.overdue}건`);
+  if (b.stats.todayEvents) summary.push(`일정 ${b.stats.todayEvents}건`);
+  lines.push(summary.join(' · '));
+
+  todayTodos.slice(0, 3).forEach((x) => lines.push(`• ${todoLine(x)}`));
+  if (todayTodos.length > 3) lines.push(`• 외 ${todayTodos.length - 3}건`);
+  if (overdue.length) {
+    const first = overdue.slice().sort((a, c) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[c.priority] || a.due.localeCompare(c.due))[0];
+    lines.push(`미완료: ${first.title}(${diffDays(t, first.due)}일 지연)${overdue.length > 1 ? ` 외 ${overdue.length - 1}건` : ''}`);
+  }
+  if (memoSec) {
+    const n = memoSec.items.length + (memoSec.more || 0);
+    lines.push(`${memoSec.title}: ${memoSec.items[0]}${n > 1 ? ` 외 ${n - 1}건` : ''}`);
+  }
+  if (!todayTodos.length && !overdue.length && !b.stats.todayEvents && !memoSec) {
+    lines.push('오늘은 예정된 할 일이 없습니다. 좋은 하루 보내세요!');
+  }
+
+  const body = lines.join('\n');
+  return {
+    title: `${formatLong(t)} 아침 브리핑`,
+    body: body.length > 600 ? `${body.slice(0, 600)}…` : body,
+    url: './#briefing',
+    tag: `briefing-${t}`,
   };
 }
