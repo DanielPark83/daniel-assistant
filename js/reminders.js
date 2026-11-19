@@ -74,7 +74,8 @@ export function dueReminders(state, from, to) {
     const at = fireAt(item, kind);
     if (!at || at <= from || at > to) return;
     out.push({
-      key: `${kind}:${item.id}:${at.toISOString()}`,
+      // 기기·발송기의 시계(시간대)와 상관없이 같은 알람이면 같은 값 → 알림이 겹치지 않고 하나로 합쳐진다
+      key: `${kind}:${item.id}:${dateOf(item, kind)}:${item.time || 'allday'}:${item.remind}`,
       kind, id: item.id, at, url: kind === 'event' ? './#calendar' : './#todos',
       ...message(item, kind, at),
     });

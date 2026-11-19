@@ -1446,7 +1446,9 @@ async function showReminder(r, { late }) {
   if ('Notification' in window && Notification.permission === 'granted' && 'serviceWorker' in navigator) {
     try {
       const reg = await navigator.serviceWorker.ready;
-      await reg.showNotification(r.title, { body, tag: r.key, icon: 'icons/icon-192.png', badge: 'icons/badge-96.png', data: { url: r.url } });
+      // 알림 발송기가 이미 보낸 알람이면 다시 울리지 않는다
+      const already = await reg.getNotifications({ tag: r.key });
+      if (!already.length) await reg.showNotification(r.title, { body, tag: r.key, icon: 'icons/icon-192.png', badge: 'icons/badge-96.png', data: { url: r.url } });
       shown = true;
     } catch { /* 앱 안에서라도 알린다 */ }
   }

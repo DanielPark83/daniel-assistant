@@ -32,7 +32,8 @@ function memoLine(m) {
 
 const todoLine = (t) => `${t.title}${t.time ? ` (${formatTime(t.time)})` : ''}${t.priority === 'high' ? ' · 중요' : ''}`;
 
-export function buildBriefing(state, now = new Date()) {
+// clockOffsetMs: now가 실제 시각보다 앞당겨진 "벽시계 시각"일 때(알림 발송기) 그 차이
+export function buildBriefing(state, now = new Date(), { clockOffsetMs = 0 } = {}) {
   const t = toISODate(now);
   const todayTodos = todosDueOn(state, t);
   const overdue = overdueTodos(state, t);
@@ -45,7 +46,7 @@ export function buildBriefing(state, now = new Date()) {
   const upcomingEvents = eventsBetween(state, addDays(t, 1), addDays(t, 3)).filter((e) => e.date > t);
   const noDate = state.todos.filter((x) => !x.done && !x.due);
   // 최근 24시간 안에 쓰거나 고친 메모(기술 브리핑 제외), 없으면 고정 메모
-  const since = new Date(now.getTime() - 86400000).toISOString();
+  const since = new Date(now.getTime() - clockOffsetMs - 86400000).toISOString();
   const plainMemos = state.memos.filter((m) => !m.tags.includes(BRIEFING_TAG));
   const recentMemos = plainMemos.filter((m) => m.updatedAt >= since)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -130,8 +131,8 @@ export function buildBriefing(state, now = new Date()) {
 }
 
 // 아침 알림 한 건: 제목과 몇 줄짜리 본문. 누르면 앱의 브리핑 화면이 열린다.
-export function buildMorningPush(state, now = new Date()) {
-  const b = buildBriefing(state, now);
+export function buildMorningPush(state, now = new Date(), opts = {}) {
+  const b = buildBriefing(state, now, opts);
   const t = b.date;
   const todayTodos = todosDueOn(state, t);
   const overdue = overdueTodos(state, t);

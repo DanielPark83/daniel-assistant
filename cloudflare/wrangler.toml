@@ -1,0 +1,16 @@
+# 참고용 설정 파일(wrangler로 직접 배포할 때). 실제 배포는 Cloudflare API로 같은 값을 넣는다.
+name = "daniel-assistant-notifier"
+main = "dist/worker.js"
+compatibility_date = "2025-09-01"
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+DATA_REPO = "DanielPark83/Obsidian-mobile"
+DATA_BRANCH = "claude/festive-carson-m3r30t"
+TZ_OFFSET_MINUTES = "540"
+BRIEFING_TIME = "08:00"
+VAPID_SUBJECT = "https://danielpark83.github.io/daniel-assistant/"
+
+# 비밀 값(GITHUB_TOKEN)은 여기에 쓰지 않고 Cloudflare 대시보드의 Secret으로 넣는다.

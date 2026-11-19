@@ -6,6 +6,7 @@
   "description": "Daniel's 개인 비서 — 일정·할 일·메모·브리핑 통합 대시보드 (PWA)",
   "scripts": {
     "start": "python3 -m http.server 8080",
-    "test": "node --test"
+    "test": "node --test",
+    "build:worker": "npx --yes esbuild@0.24.0 cloudflare/worker.js --bundle --format=esm --platform=neutral --target=es2022 --outfile=cloudflare/dist/worker.js --legal-comments=inline"
   }
 }

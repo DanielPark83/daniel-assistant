@@ -69,14 +69,20 @@ self.addEventListener('push', (event) => {
     data = { body: event.data ? event.data.text() : '' };
   }
   const title = data.title || "Daniel's 개인 비서";
-  event.waitUntil(self.registration.showNotification(title, {
-    body: data.body || '오늘의 브리핑을 확인해 보세요.',
-    icon: 'icons/icon-192.png',
-    badge: 'icons/badge-96.png',
-    tag: data.tag || 'briefing',
-    renotify: true,
-    data: { url: data.url || './#briefing' },
-  }));
+  const tag = data.tag || 'briefing';
+  event.waitUntil((async () => {
+    // 앱이 같은 알람을 이미 띄웠으면 조용히 바꿔 끼운다(두 번 울리지 않게)
+    const existing = await self.registration.getNotifications({ tag });
+    await self.registration.showNotification(title, {
+      body: data.body || '오늘의 브리핑을 확인해 보세요.',
+      icon: 'icons/icon-192.png',
+      badge: 'icons/badge-96.png',
+      tag,
+      renotify: existing.length === 0,
+      silent: existing.length > 0,
+      data: { url: data.url || './#briefing' },
+    });
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {
