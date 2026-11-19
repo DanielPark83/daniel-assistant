@@ -5,9 +5,9 @@
 //  - 정해진 시각(기본 08:00)의 아침 브리핑
 // 을 알림을 켠 모든 기기로 보낸다. 앱이 꺼져 있어도 받을 수 있다.
 //
-// 설정(Cloudflare 변수)
+// 설정(Cloudflare 변수). GITHUB_TOKEN만 꼭 넣으면 되고, 나머지는 아래 DEFAULTS를 쓴다.
 //   GITHUB_TOKEN        (비밀) 데이터 저장소 읽기 권한(Contents: Read-only) 토큰
-//   DATA_REPO           데이터 저장소, 예: DanielPark83/Obsidian-mobile
+//   DATA_REPO           데이터 저장소
 //   DATA_BRANCH         데이터가 있는 브랜치
 //   TZ_OFFSET_MINUTES   시간대(분). 한국 540
 //   BRIEFING_TIME       아침 브리핑 시각 "HH:MM", 끄려면 "off"
@@ -22,6 +22,14 @@ import { buildMorningPush } from '../js/briefing.js';
 import { sendWebPush } from './webpush.js';
 
 const DATA_PATH = 'data/assistant.json';
+
+const DEFAULTS = {
+  DATA_REPO: 'DanielPark83/Obsidian-mobile',
+  DATA_BRANCH: 'claude/festive-carson-m3r30t',
+  TZ_OFFSET_MINUTES: '540',
+  BRIEFING_TIME: '08:00',
+  VAPID_SUBJECT: 'https://danielpark83.github.io/daniel-assistant/',
+};
 
 export function targets(state) {
   if (!state.vapid) return [];
@@ -62,8 +70,9 @@ async function loadState(env, fetchImpl) {
   return normalize(await res.json());
 }
 
-export async function run(env, scheduledTime, fetchImpl = fetch) {
-  if (!env.GITHUB_TOKEN || !env.DATA_REPO) return { skipped: 'not-configured' };
+export async function run(rawEnv, scheduledTime, fetchImpl = fetch) {
+  const env = { ...DEFAULTS, ...Object.fromEntries(Object.entries(rawEnv || {}).filter(([, v]) => v !== undefined && v !== '')) };
+  if (!env.GITHUB_TOKEN) return { skipped: 'not-configured' };
   const state = await loadState(env, fetchImpl);
   if (!state) return { skipped: 'no-data' };
   const list = targets(state);
@@ -74,7 +83,7 @@ export async function run(env, scheduledTime, fetchImpl = fetch) {
   });
   if (!messages.length) return { sent: 0 };
 
-  const vapid = { subject: env.VAPID_SUBJECT || 'https://github.com/', publicKey: state.vapid.publicKey, privateKey: state.vapid.privateKey };
+  const vapid = { subject: env.VAPID_SUBJECT, publicKey: state.vapid.publicKey, privateKey: state.vapid.privateKey };
   const results = [];
   for (const m of messages) {
     const payload = JSON.stringify({ title: m.title, body: m.body, url: m.url, tag: m.tag });
@@ -98,8 +107,18 @@ export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(run(env, event.scheduledTime).catch((err) => console.log(`실패: ${err.message}`)));
   },
-  // 주소로 열면 동작 여부만 알려 준다(내용은 보여 주지 않는다)
-  async fetch() {
-    return new Response("Daniel's 개인 비서 알림 발송기 — 동작 중\n", { headers: { 'content-type': 'text/plain; charset=utf-8' } });
+  // 주소로 열면 설정 상태만 알려 준다(내용은 보여 주지 않는다)
+  async fetch(request, rawEnv) {
+    const env = { ...DEFAULTS, ...rawEnv };
+    let state = '설정 필요: Settings → Variables and Secrets에 GITHUB_TOKEN(Secret)을 넣어 주세요.';
+    if (env.GITHUB_TOKEN) {
+      try {
+        const s = await loadState(env, fetch);
+        state = s ? `정상 — 데이터를 읽었습니다. 알림 받는 기기 ${targets(s).length}대` : '데이터 파일이 아직 없습니다(앱에서 동기화를 연결해 주세요).';
+      } catch (err) {
+        state = `데이터를 읽지 못했습니다(${err.message}). 토큰 권한(Obsidian-mobile, Contents: Read-only)을 확인해 주세요.`;
+      }
+    }
+    return new Response(`Daniel's 개인 비서 알림 발송기\n상태: ${state}\n`, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
   },
 };

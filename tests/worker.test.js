@@ -125,6 +125,10 @@ test('발송기 전체: GitHub에서 읽고, 암호화해 보낸다', async () =
   assert.equal(calls.length, 1);
   // 설정 전·데이터 없음
   assert.deepEqual(await run({}, KST(19, 12, 0), fetchImpl), { skipped: 'not-configured' });
+  // 토큰만 넣으면 나머지는 기본값(데이터 저장소·브랜치)으로 동작한다
+  calls.length = 0;
+  await run({ GITHUB_TOKEN: 'gh-token' }, KST(19, 12, 0), fetchImpl);
+  assert.match(calls[0].url, /repos\/DanielPark83\/Obsidian-mobile\/contents\/data\/assistant\.json\?ref=claude%2Ffestive-carson-m3r30t$/);
   assert.deepEqual(await run(env, KST(19, 12, 0), async () => new Response('', { status: 404 })), { skipped: 'no-data' });
 });
 

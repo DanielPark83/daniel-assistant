@@ -551,6 +551,13 @@ async function sendWebPush(subscription, payload, vapid, { ttl = 3600, urgency =
 
 // cloudflare/worker.js
 var DATA_PATH = "data/assistant.json";
+var DEFAULTS = {
+  DATA_REPO: "DanielPark83/Obsidian-mobile",
+  DATA_BRANCH: "claude/festive-carson-m3r30t",
+  TZ_OFFSET_MINUTES: "540",
+  BRIEFING_TIME: "08:00",
+  VAPID_SUBJECT: "https://danielpark83.github.io/daniel-assistant/"
+};
 function targets(state2) {
   if (!state2.vapid) return [];
   return Object.entries(state2.devices).filter(([, d]) => d.push && d.vapidKey === state2.vapid.publicKey).map(([id, d]) => ({ id, label: d.label, subscription: d.push }));
@@ -587,8 +594,9 @@ async function loadState(env, fetchImpl) {
   if (!res.ok) throw new Error(`GitHub ${res.status}`);
   return normalize(await res.json());
 }
-async function run(env, scheduledTime, fetchImpl = fetch) {
-  if (!env.GITHUB_TOKEN || !env.DATA_REPO) return { skipped: "not-configured" };
+async function run(rawEnv, scheduledTime, fetchImpl = fetch) {
+  const env = { ...DEFAULTS, ...Object.fromEntries(Object.entries(rawEnv || {}).filter(([, v]) => v !== void 0 && v !== "")) };
+  if (!env.GITHUB_TOKEN) return { skipped: "not-configured" };
   const state2 = await loadState(env, fetchImpl);
   if (!state2) return { skipped: "no-data" };
   const list = targets(state2);
@@ -598,7 +606,7 @@ async function run(env, scheduledTime, fetchImpl = fetch) {
     briefingTime: env.BRIEFING_TIME ?? "08:00"
   });
   if (!messages.length) return { sent: 0 };
-  const vapid = { subject: env.VAPID_SUBJECT || "https://github.com/", publicKey: state2.vapid.publicKey, privateKey: state2.vapid.privateKey };
+  const vapid = { subject: env.VAPID_SUBJECT, publicKey: state2.vapid.publicKey, privateKey: state2.vapid.privateKey };
   const results = [];
   for (const m of messages) {
     const payload = JSON.stringify({ title: m.title, body: m.body, url: m.url, tag: m.tag });
@@ -622,9 +630,21 @@ var worker_default = {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(run(env, event.scheduledTime).catch((err) => console.log(`\uC2E4\uD328: ${err.message}`)));
   },
-  // 주소로 열면 동작 여부만 알려 준다(내용은 보여 주지 않는다)
-  async fetch() {
-    return new Response("Daniel's \uAC1C\uC778 \uBE44\uC11C \uC54C\uB9BC \uBC1C\uC1A1\uAE30 \u2014 \uB3D9\uC791 \uC911\n", { headers: { "content-type": "text/plain; charset=utf-8" } });
+  // 주소로 열면 설정 상태만 알려 준다(내용은 보여 주지 않는다)
+  async fetch(request, rawEnv) {
+    const env = { ...DEFAULTS, ...rawEnv };
+    let state2 = "\uC124\uC815 \uD544\uC694: Settings \u2192 Variables and Secrets\uC5D0 GITHUB_TOKEN(Secret)\uC744 \uB123\uC5B4 \uC8FC\uC138\uC694.";
+    if (env.GITHUB_TOKEN) {
+      try {
+        const s = await loadState(env, fetch);
+        state2 = s ? `\uC815\uC0C1 \u2014 \uB370\uC774\uD130\uB97C \uC77D\uC5C8\uC2B5\uB2C8\uB2E4. \uC54C\uB9BC \uBC1B\uB294 \uAE30\uAE30 ${targets(s).length}\uB300` : "\uB370\uC774\uD130 \uD30C\uC77C\uC774 \uC544\uC9C1 \uC5C6\uC2B5\uB2C8\uB2E4(\uC571\uC5D0\uC11C \uB3D9\uAE30\uD654\uB97C \uC5F0\uACB0\uD574 \uC8FC\uC138\uC694).";
+      } catch (err) {
+        state2 = `\uB370\uC774\uD130\uB97C \uC77D\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4(${err.message}). \uD1A0\uD070 \uAD8C\uD55C(Obsidian-mobile, Contents: Read-only)\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.`;
+      }
+    }
+    return new Response(`Daniel's \uAC1C\uC778 \uBE44\uC11C \uC54C\uB9BC \uBC1C\uC1A1\uAE30
+\uC0C1\uD0DC: ${state2}
+`, { headers: { "content-type": "text/plain; charset=utf-8" } });
   }
 };
 export {
