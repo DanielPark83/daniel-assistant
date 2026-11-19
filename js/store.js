@@ -13,6 +13,8 @@ const PRIORITY_RANK = { high: 0, medium: 1, low: 2 };
 const EPOCH = '1970-01-01T00:00:00.000Z';
 const TOMBSTONE_DAYS = 180;
 const COLLECTIONS = ['todos', 'events', 'memos'];
+// 동기화 파일의 최상위 키 중 이 버전이 아는 것. 모르는 키는 그대로 보존한다.
+const KNOWN_KEYS = new Set(['format', 'version', 'settings', 'briefingSeen', 'extras', ...COLLECTIONS, 'deleted', 'devices', 'vapid']);
 
 export const BRIEFING_TAG = '브리핑';
 export const SYNC_FORMAT = 1;
@@ -29,6 +31,7 @@ export function defaultState() {
     deleted: {},
     devices: {},
     vapid: null,
+    extras: {}, // 더 새 버전의 앱이 추가한 데이터(이 버전은 쓰지 않지만 지우지 않는다)
     briefingSeen: null,
   };
 }
@@ -85,6 +88,15 @@ function normalizeDeleted(v) {
   return out;
 }
 
+// 더 새 버전의 앱이 항목에 추가한 필드는 남겨 둔다(아는 필드만 검증해 덮어쓴다).
+const keepExtra = (x) => Object.fromEntries(Object.entries(x).filter(([, v]) => v !== undefined));
+
+function extrasOf(data) {
+  const out = isObj(data.extras) ? { ...data.extras } : {};
+  Object.keys(data).forEach((k) => { if (!KNOWN_KEYS.has(k)) out[k] = data[k]; });
+  return out;
+}
+
 // 외부에서 들어온 데이터(백업 파일, 동기화 파일 등)를 안전한 형태로 맞춘다.
 export function normalize(data) {
   const base = defaultState();
@@ -102,6 +114,7 @@ export function normalize(data) {
     todos: arr(data.todos).map((t) => {
       const createdAt = stamp(t.createdAt, stamp(t.updatedAt));
       return {
+        ...keepExtra(t),
         id: str(t.id) || uid(),
         title: str(t.title, '(제목 없음)'),
         due: isoOrNull(t.due),
@@ -121,6 +134,7 @@ export function normalize(data) {
     events: arr(data.events).filter((e) => isoOrNull(e.date)).map((e) => {
       const createdAt = stamp(e.createdAt, stamp(e.updatedAt));
       return {
+        ...keepExtra(e),
         id: str(e.id) || uid(),
         title: str(e.title, '(제목 없음)'),
         date: e.date,
@@ -135,6 +149,7 @@ export function normalize(data) {
     memos: arr(data.memos).map((m) => {
       const createdAt = stamp(m.createdAt, stamp(m.updatedAt));
       return {
+        ...keepExtra(m),
         id: str(m.id) || uid(),
         title: str(m.title),
         body: str(m.body),
@@ -147,6 +162,7 @@ export function normalize(data) {
     deleted: normalizeDeleted(data.deleted),
     devices: normalizeDevices(data.devices),
     vapid: normalizeVapid(data.vapid),
+    extras: extrasOf(data),
     briefingSeen: isoOrNull(data.briefingSeen),
   };
 }
@@ -372,6 +388,7 @@ export function stableStringify(v) {
 
 export function syncSnapshot(s = state) {
   return JSON.parse(JSON.stringify({
+    ...(s.extras || {}),
     format: SYNC_FORMAT,
     todos: s.todos,
     events: s.events,
@@ -428,6 +445,7 @@ export function mergeSnapshots(rawA, rawB, now = new Date()) {
       : (a.vapid.createdAt < b.vapid.createdAt ? a.vapid : b.vapid);
   }
   out.vapid = vapid;
+  out.extras = { ...b.extras, ...a.extras };
 
   return syncSnapshot({ ...out });
 }
@@ -439,6 +457,7 @@ export function applySnapshot(snap) {
   const merged = mergeSnapshots(before, snap);
   if (stableStringify(merged) === stableStringify(before)) return false;
   const n = normalize({ ...merged, settings: state.settings, briefingSeen: state.briefingSeen });
+  n.extras = extrasOf(merged);
   state = n;
   commit({ synced: false, remote: true });
   return true;

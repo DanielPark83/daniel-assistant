@@ -168,6 +168,10 @@ async function syncOnce() {
   let lastConflict = null;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const remote = await readRemote();
+    if (remote.data && Number(remote.data.format) > store.SYNC_FORMAT) {
+      // 더 새 버전의 앱이 바꾼 형식이면 덮어쓰지 않는다(이 기기의 앱이 옛 버전인 경우)
+      throw new SyncError('다른 기기에서 쓰는 앱이 더 새 버전입니다. 이 기기에서 앱을 완전히 닫았다가 다시 열어 업데이트해 주세요.', 'outdated');
+    }
     store.applySnapshot(remote.data);
     const local = store.syncSnapshot();
     if (remote.data && store.sameSnapshot(local, remote.data)) return;

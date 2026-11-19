@@ -12,6 +12,9 @@ import {
   formatLong, formatShort, formatRelative, formatTime, WEEKDAYS,
 } from './dates.js';
 
+// 이 스크립트 주소의 ?v= 값이 지금 실행 중인 앱 버전이다(index.html 참고).
+const APP_VERSION = new URL(import.meta.url).searchParams.get('v') || 'dev';
+
 const TABS = ['home', 'todos', 'calendar', 'memos', 'briefing'];
 const PRIORITY_LABEL = { high: '높음', medium: '보통', low: '낮음' };
 const REPEAT_LABEL = { daily: '매일', weekly: '매주', monthly: '매월' };
@@ -1266,6 +1269,7 @@ document.addEventListener('change', (e) => {
 });
 
 sheet.addEventListener('close', () => {
+  setTimeout(applyUpdateIfIdle, 0);
   stopScan();
   ui.showQr = false;
   ui.repoChoices = null;
@@ -1284,15 +1288,53 @@ function refreshIfIdle() {
   if (!sheet.open && !typing) render();
   else pendingRender = true;
 }
-// 입력을 마치면 미뤄 둔 화면 갱신을 한다
+// 입력을 마치면 미뤄 둔 화면 갱신(과 앱 업데이트)을 한다
 document.addEventListener('focusout', () => {
   setTimeout(() => {
+    applyUpdateIfIdle();
     const a = document.activeElement;
     if (pendingRender && !sheet.open && !(a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName))) render();
   }, 0);
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshIfIdle(); });
 setInterval(() => { if (!document.hidden && ui.tab === 'home') refreshIfIdle(); }, 60000);
+
+// ───────── 앱 업데이트 ─────────
+// 새 버전이 배포되면 열려 있는 앱도 바로 새 버전으로 바꾼다.
+// 입력 중이거나 설정·편집 창이 열려 있으면 끝날 때까지 기다렸다가 새로 고친다.
+
+const UPDATE_KEY = 'daniel-assistant.update';
+let updateTo = null;
+let lastUpdateCheck = 0;
+
+function isBusy() {
+  const a = document.activeElement;
+  return sheet.open || !!(a && ['INPUT', 'TEXTAREA', 'SELECT'].includes(a.tagName) && a.value);
+}
+
+function applyUpdateIfIdle() {
+  if (!updateTo || isBusy()) return;
+  // 같은 버전으로 두 번 새로 고치지 않는다(서버 반영이 늦을 때 무한 반복 방지)
+  let tried = null;
+  try { tried = sessionStorage.getItem(UPDATE_KEY); } catch { /* 무시 */ }
+  if (tried === updateTo) return;
+  try { sessionStorage.setItem(UPDATE_KEY, updateTo); } catch { /* 무시 */ }
+  location.reload();
+}
+
+async function checkForUpdate() {
+  if (APP_VERSION === 'dev' || Date.now() - lastUpdateCheck < 60000) return;
+  lastUpdateCheck = Date.now();
+  try {
+    const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return;
+    const { version } = await res.json();
+    if (typeof version === 'string' && version !== APP_VERSION) {
+      updateTo = version;
+      applyUpdateIfIdle();
+    }
+  } catch { /* 오프라인이면 다음에 확인 */ }
+}
 
 // ───────── 시작 ─────────
 
@@ -1316,6 +1358,18 @@ sync.onStatus(() => { refreshPanels(); renderSyncIndicator(); });
 route();
 renderSyncIndicator();
 sync.start();
+
+// 새 버전으로 바뀐 직후라면 알려 준다
+try {
+  const done = sessionStorage.getItem(UPDATE_KEY);
+  if (done && done === APP_VERSION) {
+    sessionStorage.removeItem(UPDATE_KEY);
+    setTimeout(() => toast('앱을 새 버전으로 업데이트했습니다.'), 400);
+  }
+} catch { /* 무시 */ }
+setTimeout(checkForUpdate, 1500);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
+setInterval(() => { if (!document.hidden) checkForUpdate(); }, 30 * 60 * 1000);
 if (sync.isConnected()) {
   // 첫 동기화가 끝나면 알림 구독 상태를 맞춘다
   const off = sync.onStatus((st) => { if (st.state === 'idle') { off(); push.reconcile(); } });

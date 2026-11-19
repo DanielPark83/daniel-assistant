@@ -1,7 +1,9 @@
 // 서비스 워커: 앱 파일을 캐시해 오프라인에서도 열리게 한다.
-// 온라인일 때는 항상 최신 파일을 받아 캐시를 갱신한다(네트워크 우선).
+// 온라인일 때는 매번 서버에 최신 파일인지 확인하고(no-cache) 받아 캐시를 갱신한다.
+// 브라우저의 HTTP 캐시(GitHub Pages는 최대 10분)를 거치지 않으므로 새 버전이 바로 반영되고,
+// 새 파일과 옛 파일이 섞여 불러와지는 일이 없다.
 
-const CACHE = 'daniel-assistant-v3';
+const CACHE = 'daniel-assistant-v4';
 const SHELL = [
   './',
   'index.html',
@@ -38,14 +40,17 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
+  const url = new URL(req.url);
   // 같은 출처의 GET 요청만 다룬다
-  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  if (req.method !== 'GET' || url.origin !== self.location.origin) return;
   event.respondWith(
-    fetch(req)
+    fetch(req, { cache: 'no-cache' })
       .then((res) => {
-        if (res.ok) {
+        if (res.ok && !url.pathname.endsWith('/version.json')) {
+          // 스크립트는 ?v=버전 주소로 불리지만, 오프라인용 사본은 버전 없이 파일마다 하나만 둔다
+          const key = req.mode === 'navigate' ? req : new Request(`${url.origin}${url.pathname}`);
           const copy = res.clone();
-          caches.open(CACHE).then((cache) => cache.put(req, copy));
+          caches.open(CACHE).then((cache) => cache.put(key, copy));
         }
         return res;
       })
