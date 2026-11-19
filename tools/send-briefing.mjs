@@ -75,7 +75,7 @@ async function main() {
   const state = normalize(JSON.parse(raw));
   const list = targets(state);
   if (!list.length) {
-    console.log('알림을 켠 기기가 없습니다. 앱의 설정 → 아침 브리핑 알림에서 켜 주세요.');
+    console.log('알림을 켠 기기가 없습니다. 앱의 설정 → 알림에서 「이 기기에서 알림 받기」를 눌러 주세요.');
     return;
   }
 
@@ -95,7 +95,7 @@ async function main() {
   console.log(`${message.title}: ${list.length}개 기기에 보냄`);
   results.forEach((r) => {
     if (r.ok) console.log(`  ✓ ${r.label} (${r.status})`);
-    else if (r.expired) console.log(`  ✗ ${r.label}: 알림 구독이 만료되었습니다. 그 기기의 앱에서 설정 → 아침 브리핑 알림을 껐다가 다시 켜 주세요.`);
+    else if (r.expired) console.log(`  ✗ ${r.label}: 알림 구독이 만료되었습니다. 그 기기의 앱에서 설정 → 알림을 껐다가 다시 켜 주세요.`);
     else console.log(`  ✗ ${r.label}: 보내지 못했습니다 (${r.status || '오류'}) ${String(r.error).slice(0, 200)}`);
   });
   if (results.every((r) => !r.ok)) process.exitCode = 1;

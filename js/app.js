@@ -638,9 +638,10 @@ const sheetHead = (title) => `
 function remindFieldHtml(value) {
   const v = value == null ? '' : String(value);
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
-  const note = perm === 'granted'
-    ? '앱이 켜져 있거나 백그라운드에 있을 때 이 기기 알림으로 울립니다.'
-    : '이 기기의 알림 권한이 꺼져 있어 앱 화면 안에서만 알려 드립니다. 설정 → 아침 브리핑 알림에서 알림을 켜 주세요.';
+  let note;
+  if (perm === 'granted' && push.isEnabledHere()) note = '앱이 꺼져 있어도 이 기기로 알림이 옵니다.';
+  else if (perm === 'granted') note = '지금은 앱이 켜져 있을 때만 울립니다. 앱이 꺼져 있어도 받으려면 설정 → 알림에서 「이 기기에서 알림 받기」를 눌러 주세요.';
+  else note = '이 기기의 알림 권한이 꺼져 있어 앱 화면 안에서만 알려 드립니다. 설정 → 알림에서 「이 기기에서 알림 받기」를 눌러 주세요.';
   return `
     <label class="field"><span>알람</span>
       <select class="input" name="remind">
@@ -764,7 +765,7 @@ function settingsSheet() {
       <h3 class="group-title">기기 간 동기화</h3>
       <div id="sync-panel" class="panel">${syncPanelHtml()}</div>
 
-      <h3 class="group-title">아침 브리핑 알림</h3>
+      <h3 class="group-title">알림 (알람·아침 브리핑)</h3>
       <div id="push-panel" class="panel">${pushPanelHtml()}</div>
 
       <h3 class="group-title">데이터</h3>
@@ -866,7 +867,7 @@ function syncPanelHtml() {
 }
 
 function pushPanelHtml() {
-  const intro = '<p class="hint">매일 오전 8시쯤 오늘 할 일·미완료 업무·메모 요약을 알림으로 보내 드립니다. 알림을 누르면 브리핑 화면이 열립니다.</p>';
+  const intro = '<p class="hint">켜 두면 앱이 꺼져 있어도 할 일·일정 <b>알람</b>과 매일 오전 8시 <b>아침 브리핑</b>(오늘 할 일·미완료 업무·메모 요약)이 이 기기로 옵니다. 알림을 누르면 해당 화면이 열립니다.</p>';
   if (!sync.isConnected()) return `${intro}<p class="hint">기기 간 동기화를 먼저 연결해야 켤 수 있습니다.</p>`;
   const reason = push.unsupportedReason();
   const devices = push.receivingDevices();
