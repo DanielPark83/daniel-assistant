@@ -83,12 +83,18 @@ function apiBase() {
   try { return storage.getItem(API_OVERRIDE_KEY) || 'https://api.github.com'; } catch { return 'https://api.github.com'; }
 }
 
+const REQUEST_TIMEOUT = 20000;
+
 async function api(path, { method = 'GET', body, token = config && config.token } = {}) {
   let res;
+  // 모바일에서 응답 없이 멈춘 요청이 동기화를 영원히 붙잡지 않도록 시간 제한을 둔다
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT) : null;
   try {
     res = await fetch(`${apiBase()}${path}`, {
       method,
       cache: 'no-store',
+      signal: ctrl ? ctrl.signal : undefined,
       headers: {
         Accept: 'application/vnd.github+json',
         Authorization: `Bearer ${token}`,
@@ -96,8 +102,11 @@ async function api(path, { method = 'GET', body, token = config && config.token 
       },
       body: body ? JSON.stringify(body) : undefined,
     });
-  } catch {
+  } catch (err) {
+    if (err && err.name === 'AbortError') throw new SyncError('GitHub가 20초 동안 응답하지 않아 동기화를 미뤘습니다.', 'offline');
     throw new SyncError('인터넷에 연결되어 있지 않아 동기화를 미뤘습니다.', 'offline');
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   if (res.ok) return res.status === 204 ? null : res.json();
 

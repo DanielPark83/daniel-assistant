@@ -141,10 +141,14 @@ function todoRow(todo, t, { postpone = false } = {}) {
     </li>`;
 }
 
-function eventRow(ev) {
-  const time = ev.allDay || !ev.time ? '종일' : formatTime(ev.time);
+// day: 이 줄을 보여 주는 날. 여러 날 일정은 첫날에 시작 시각, 마지막 날에 끝 시각을 보여 준다.
+function eventRow(ev, day = ev.date) {
+  const multi = store.isMultiDay(ev);
+  let time = !ev.time ? '종일' : formatTime(ev.time);
+  if (multi && day > ev.date) time = day === ev.endDate && ev.endTime ? `~${formatTime(ev.endTime)}` : '종일';
   const sub = [
-    ev.endTime && ev.time ? `~ ${formatTime(ev.endTime)}` : '',
+    multi ? `${formatShort(ev.date)} ~ ${formatShort(ev.endDate)} (${diffDays(day, ev.date) + 1}/${diffDays(ev.endDate, ev.date) + 1}일)` : '',
+    !multi && ev.endTime && ev.time ? `~ ${formatTime(ev.endTime)}` : '',
     ev.location ? ev.location : '',
   ].filter(Boolean).join(' · ');
   return `
@@ -165,7 +169,7 @@ function quickAdd({ modes = true } = {}) {
   const mode = modes ? ui.quickMode : 'todo';
   const placeholder = {
     todo: '예: 내일 오후 3시 보고서 제출 !중요 #업무',
-    event: '예: 금요일 저녁 7시 가족 식사',
+    event: '예: 금요일 저녁 7시 가족 식사 / 20~22일 부산 출장',
     memo: '예: 회의 아이디어 — 온보딩 개선 #기획',
   }[mode];
   return `
@@ -192,7 +196,12 @@ function quickPreview(form) {
   const t = today();
   const chips = [];
   const due = p.due || (mode === 'event' ? t : null);
-  if (due) chips.push(`<span class="chip chip-accent">${icon('calendar')}${esc(`${formatRelative(due, t)}${p.time ? ` ${formatTime(p.time)}` : ''}`)}</span>`);
+  if (due && p.endDate && mode === 'event') {
+    chips.push(`<span class="chip chip-accent">${icon('calendar')}${esc(`${formatShort(due)} ~ ${formatShort(p.endDate)} · ${diffDays(p.endDate, due) + 1}일${p.time ? ` · ${formatTime(p.time)}` : ''}`)}</span>`);
+  } else if (due) {
+    const d = mode === 'todo' && p.endDate ? p.endDate : due;
+    chips.push(`<span class="chip chip-accent">${icon('calendar')}${esc(`${formatRelative(d, t)}${p.time ? ` ${formatTime(p.time)}` : ''}`)}</span>`);
+  }
   if (mode === 'todo') {
     if (p.priority === 'high') chips.push(`<span class="chip chip-warning">${icon('flag')}중요</span>`);
     if (p.priority === 'low') chips.push('<span class="chip">낮음</span>');
@@ -216,7 +225,7 @@ function viewHome() {
   const todayEvents = store.eventsOn(s, t);
   const weekEvents = store.eventsBetween(s, t, addDays(t, 7));
   const nowHM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  const nextEvent = todayEvents.find((e) => e.time && e.time >= nowHM);
+  const nextEvent = todayEvents.find((e) => e.time && e.date === t && e.time >= nowHM);
 
   // 예정 일정: 오늘부터 7일, 날짜별로 묶는다
   const groups = new Map();
@@ -305,7 +314,7 @@ function viewHome() {
       </div>
       ${eventGroups.length ? eventGroups.map(([day, list]) => `
         <h3 class="group-title">${esc(formatRelative(day, t))}${diffDays(day, t) > 2 ? '' : ` · ${esc(formatShort(day))}`}</h3>
-        <ul class="list">${list.map(eventRow).join('')}</ul>`).join('') : empty('앞으로 7일간 예정된 일정이 없습니다.')}
+        <ul class="list">${list.map((e) => eventRow(e, day)).join('')}</ul>`).join('') : empty('앞으로 7일간 예정된 일정이 없습니다.')}
     </section>
 
     ${s.briefingSeen === t ? briefingCard : ''}
@@ -433,7 +442,7 @@ function viewCalendar() {
         <h2>${esc(formatLong(ui.calDay))}</h2>
         <button class="btn btn-small" type="button" data-action="new-event">${icon('plus')}일정</button>
       </div>
-      ${dayEvents.length ? `<ul class="list">${dayEvents.map(eventRow).join('')}</ul>` : empty('일정이 없습니다.')}
+      ${dayEvents.length ? `<ul class="list">${dayEvents.map((e) => eventRow(e, ui.calDay)).join('')}</ul>` : empty('일정이 없습니다.')}
       ${dayTodos.length ? `<h3 class="group-title">할 일 마감</h3><ul class="list">${dayTodos.map((x) => todoRow(x, t)).join('')}</ul>` : ''}
     </section>
   `;
@@ -649,16 +658,20 @@ function todoSheet(todo) {
 }
 
 function eventSheet(ev, date) {
-  const e = ev || { title: '', date: date || ui.calDay, time: '', endTime: '', location: '', notes: '' };
+  const e = ev || { title: '', date: date || ui.calDay, endDate: '', time: '', endTime: '', location: '', notes: '' };
   openSheet(`
     ${sheetHead(ev ? '일정 수정' : '새 일정')}
     <form class="form" data-form="event" data-id="${esc(ev ? ev.id : '')}">
       <label class="field"><span>제목</span><input class="input" name="title" required value="${esc(e.title)}"></label>
-      <label class="field"><span>날짜</span><input class="input" name="date" type="date" required value="${esc(e.date)}"></label>
       <div class="field-row">
-        <label class="field"><span>시작</span><input class="input" name="time" type="time" value="${esc(e.time || '')}"></label>
-        <label class="field"><span>종료</span><input class="input" name="endTime" type="time" value="${esc(e.endTime || '')}"></label>
+        <label class="field"><span>시작일</span><input class="input" name="date" type="date" required value="${esc(e.date)}"></label>
+        <label class="field"><span>종료일 <small>(여러 날일 때)</small></span><input class="input" name="endDate" type="date" value="${esc(e.endDate || '')}" min="${esc(e.date)}"></label>
       </div>
+      <div class="field-row">
+        <label class="field"><span>시작 시간</span><input class="input" name="time" type="time" value="${esc(e.time || '')}"></label>
+        <label class="field"><span>종료 시간</span><input class="input" name="endTime" type="time" value="${esc(e.endTime || '')}"></label>
+      </div>
+      <p class="hint">시간을 비우면 종일 일정입니다. 여러 날 일정의 종료 시간은 마지막 날의 시각입니다.</p>
       <label class="field"><span>장소</span><input class="input" name="location" value="${esc(e.location)}"></label>
       <label class="field"><span>메모</span><textarea class="input" name="notes" rows="3">${esc(e.notes)}</textarea></label>
       <div class="form-actions">
@@ -814,15 +827,21 @@ function pushPanelHtml() {
     ? `<p class="hint">알림 받는 기기: ${esc(devices.map((d) => (d.here ? `${d.label}(이 기기)` : d.label)).join(', '))}</p>` : '';
   if (reason) return `${intro}<p class="hint">${esc(reason)}</p>${list}`;
   const on = push.isEnabledHere();
+  const s = store.getState();
+  const me = s.devices[sync.deviceId()];
+  const needsRedo = !on && me && me.push && Notification.permission === 'granted';
+  const err = ui.pushError;
   return `
     ${intro}
     <p class="sync-status ${on ? 'is-ok' : ''}">${icon('bell')}<span>이 기기: ${on ? '켜짐' : '꺼짐'}${!on && others.length ? ` · ${esc(others.join(', '))}에서 받는 중` : ''}</span></p>
     <div class="btn-row">
       ${on
     ? `<button class="btn" type="button" data-action="push-disable" ${ui.pushBusy ? 'disabled' : ''}>이 기기 알림 끄기</button>`
-    : `<button class="btn btn-primary" type="button" data-action="push-enable" ${ui.pushBusy ? 'disabled' : ''}>${ui.pushBusy ? '켜는 중…' : '이 기기에서 알림 받기'}</button>`}
+    : `<button class="btn btn-primary" type="button" data-action="push-enable" ${ui.pushBusy ? 'disabled' : ''}>${ui.pushBusy ? esc(ui.pushBusy) : needsRedo ? '알림 다시 켜기' : '이 기기에서 알림 받기'}</button>`}
       <button class="btn" type="button" data-action="push-test">지금 브리핑 알림 보기</button>
     </div>
+    ${needsRedo ? '<p class="hint">다른 기기와 알림 키가 바뀌어 이 기기는 다시 켜야 합니다.</p>' : ''}
+    ${err ? `<div class="sync-status is-error">${icon('alert')}<span>${esc(err.message)}${err.step ? `<br><small>멈춘 단계: ${esc(err.step)}${err.detail ? ` · ${esc(err.detail)}` : ''}</small>` : ''}</span></div>` : ''}
     ${list}`;
 }
 
@@ -1075,12 +1094,16 @@ const ACTIONS = {
     toast('동기화를 해제했습니다.');
   },
   'push-enable': async () => {
-    ui.pushBusy = true;
+    ui.pushBusy = '알림 권한 확인 중…';
+    ui.pushError = null;
     refreshPanels();
     try {
-      await push.enable();
-      toast('이 기기에서 매일 아침 브리핑 알림을 받습니다.');
+      const { saved } = await push.enable((step) => { ui.pushBusy = step; refreshPanels(); });
+      toast(saved
+        ? '이 기기에서 매일 아침 브리핑 알림을 받습니다.'
+        : '알림은 켰지만 아직 저장하지 못했습니다. 인터넷이 연결되면 자동으로 저장됩니다.');
     } catch (err) {
+      ui.pushError = { step: err.step || '', message: err.message, detail: err.detail || '' };
       toast(err.message);
     } finally {
       ui.pushBusy = false;
@@ -1132,10 +1155,14 @@ const FORMS = {
       if (!p.title) { input.value = text; toast('제목이 될 내용을 함께 적어 주세요.'); return; }
       if (mode === 'event') {
         const date = p.due || t;
-        store.addEvent({ title: p.title, date, time: p.time });
-        toast(`일정을 추가했습니다 · ${formatRelative(date, t)}${p.time ? ` ${formatTime(p.time)}` : ''}`);
+        store.addEvent({ title: p.title, date, endDate: p.endDate, time: p.time });
+        toast(`일정을 추가했습니다 · ${p.endDate ? `${formatShort(date)} ~ ${formatShort(p.endDate)}` : formatRelative(date, t)}${p.time ? ` ${formatTime(p.time)}` : ''}`);
       } else {
-        store.addTodo(p);
+        // 할 일에 기간을 쓰면 마지막 날을 마감으로 본다
+        const { endDate, ...todo } = p;
+        if (endDate) todo.due = endDate;
+        store.addTodo(todo);
+        p.due = todo.due;
         toast(p.due ? `할 일을 추가했습니다 · ${formatRelative(p.due, t)}${p.time ? ` ${formatTime(p.time)}` : ''}` : '할 일을 추가했습니다.');
       }
     }
@@ -1167,9 +1194,12 @@ const FORMS = {
     const f = form.elements;
     const title = f.title.value.trim();
     if (!title || !f.date.value) return;
+    const endDate = f.endDate.value && f.endDate.value !== f.date.value ? f.endDate.value : null;
+    if (endDate && endDate < f.date.value) { toast('종료일이 시작일보다 앞설 수 없습니다.'); f.endDate.focus(); return; }
     const fields = {
       title,
       date: f.date.value,
+      endDate,
       time: f.time.value || null,
       endTime: f.time.value ? (f.endTime.value || null) : null,
       location: f.location.value.trim(),
@@ -1242,6 +1272,15 @@ document.addEventListener('submit', (e) => {
   if (!form) return;
   e.preventDefault();
   FORMS[form.dataset.form](form);
+});
+
+document.addEventListener('change', (e) => {
+  // 일정 시작일을 바꾸면 종료일이 그보다 앞서지 않게 한다
+  if (e.target.name === 'date' && e.target.form && e.target.form.dataset.form === 'event') {
+    const end = e.target.form.elements.endDate;
+    end.min = e.target.value;
+    if (end.value && end.value < e.target.value) end.value = '';
+  }
 });
 
 document.addEventListener('input', (e) => {

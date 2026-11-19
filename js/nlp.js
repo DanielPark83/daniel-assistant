@@ -4,7 +4,7 @@
 
 import { toISODate, addDays, addMonths, startOfWeek, endOfMonth, diffDays, pad } from './dates.js';
 
-const DATE_P = '(?:까지|부터|안에|내로|에|중)?';
+const DATE_P = '(?:까지|부터|안에|내로|에서|에|중)?';
 const TIME_P = '(?:까지|부터|에)?';
 const WEEK_IDX = { 월: 0, 화: 1, 수: 2, 목: 3, 금: 4, 토: 5, 일: 6 };
 const AM_WORDS = ['오전', '아침', '새벽'];
@@ -18,7 +18,7 @@ function validDate(y, m, d) {
 
 export function parseQuickInput(raw, now = new Date()) {
   const todayIso = toISODate(now);
-  const out = { title: '', due: null, time: null, priority: 'medium', tags: [], repeat: null };
+  const out = { title: '', due: null, endDate: null, time: null, priority: 'medium', tags: [], repeat: null };
   const s = { text: ` ${String(raw || '').replace(/\s+/g, ' ').trim()} ` };
 
   // 매치된 구간을 공백으로 치환한다. handler가 false를 반환하면 소비하지 않는다.
@@ -69,61 +69,116 @@ export function parseQuickInput(raw, now = new Date()) {
     || take(new RegExp(`\\s정오${TIME_P}(?=\\s)`), () => { out.time = '12:00'; })
     || take(new RegExp(`\\s자정${TIME_P}(?=\\s)`), () => { out.time = '00:00'; });
 
-  // 5) 날짜
-  const setDue = (iso) => { if (!iso) return false; out.due = iso; return true; };
+  // 5) 날짜. 기간이면 시작일(due)과 종료일(endDate)을 함께 찾는다.
+  //    예) "11월 20일~22일", "20일부터 22일까지", "내일부터 모레까지", "다음 주 월요일부터 수요일까지", "내일부터 3일간"
   const year = now.getFullYear();
   const thisWeekMon = startOfWeek(todayIso);
+  const RANGE = '[~〜–—-]';
 
-  take(new RegExp(`\\s(\\d{4})[-./](\\d{1,2})[-./](\\d{1,2})${DATE_P}(?=\\s)`), (m) => setDue(validDate(+m[1], +m[2], +m[3])))
-    || take(new RegExp(`\\s(?:(\\d{4})년\\s?)?(\\d{1,2})월\\s?(\\d{1,2})일${DATE_P}(?=\\s)`), (m) => {
-      if (m[1]) return setDue(validDate(+m[1], +m[2], +m[3]));
-      let iso = validDate(year, +m[2], +m[3]);
-      // 두 달 넘게 지난 날짜는 내년으로 본다
-      if (iso && diffDays(iso, todayIso) < -60) iso = validDate(year + 1, +m[2], +m[3]);
-      return setDue(iso);
-    })
-    || take(new RegExp(`\\s(\\d{1,2})/(\\d{1,2})${DATE_P}(?=\\s)`), (m) => {
-      let iso = validDate(year, +m[1], +m[2]);
-      if (iso && diffDays(iso, todayIso) < -60) iso = validDate(year + 1, +m[1], +m[2]);
-      return setDue(iso);
-    })
-    || take(new RegExp(`\\s(?:(이번|다음|다다음)\\s?주\\s?)?([월화수목금토일])요일${DATE_P}(?=\\s)`), (m) => {
-      const idx = WEEK_IDX[m[2]];
-      if (m[1]) {
-        const weeks = { 이번: 0, 다음: 1, 다다음: 2 }[m[1]];
-        return setDue(addDays(thisWeekMon, weeks * 7 + idx));
+  // 연도 없이 쓴 월·일: 시작일은 두 달 넘게 지났으면 내년, 종료일은 시작일보다 앞이면 내년
+  const monthDay = (m, d, base) => {
+    const iso = validDate(+base.slice(0, 4) || year, +m, +d);
+    if (!iso) return null;
+    const rolled = validDate(+iso.slice(0, 4) + 1, +m, +d);
+    if (base === todayIso) return diffDays(iso, todayIso) < -60 ? rolled : iso;
+    // 종료일: 시작일보다 앞이면 내년(예: 12월 30일 ~ 1월 2일). 반년 넘게 벌어지면 잘못 쓴 것으로 본다
+    return iso < base && rolled && diffDays(rolled, base) <= 180 ? rolled : iso;
+  };
+  // 날짜만 쓴 경우("22일"): 기준일이 있는 달, 이미 지났으면 다음 달
+  const dayOnly = (d, base) => {
+    let iso = validDate(+base.slice(0, 4), +base.slice(5, 7), +d);
+    if (iso && iso < base) {
+      const next = addMonths(`${base.slice(0, 8)}01`, 1);
+      iso = validDate(+next.slice(0, 4), +next.slice(5, 7), +d);
+    }
+    return iso;
+  };
+
+  // 날짜 표현 하나를 찾아 문장에서 지우고 날짜를 돌려준다. base: 요일·날짜만 쓴 경우의 기준일
+  const takeDate = (base = todayIso) => {
+    let found = null;
+    const set = (iso) => { if (!iso) return false; found = iso; return true; };
+    take(new RegExp(`\\s(\\d{4})[-./](\\d{1,2})[-./](\\d{1,2})${DATE_P}(?=\\s)`), (m) => set(validDate(+m[1], +m[2], +m[3])))
+      || take(new RegExp(`\\s(?:(\\d{4})년\\s?)?(\\d{1,2})월\\s?(\\d{1,2})일${DATE_P}(?=\\s)`), (m) =>
+        set(m[1] ? validDate(+m[1], +m[2], +m[3]) : monthDay(m[2], m[3], base)))
+      || take(new RegExp(`\\s(\\d{1,2})/(\\d{1,2})${DATE_P}(?=\\s)`), (m) => set(monthDay(m[1], m[2], base)))
+      || take(new RegExp(`\\s(?:(이번|다음|다다음)\\s?주\\s?)?([월화수목금토일])요일${DATE_P}(?=\\s)`), (m) => {
+        const idx = WEEK_IDX[m[2]];
+        if (m[1]) return set(addDays(thisWeekMon, { 이번: 0, 다음: 1, 다다음: 2 }[m[1]] * 7 + idx));
+        const baseIdx = diffDays(base, startOfWeek(base));
+        return set(addDays(base, (idx - baseIdx + 7) % 7));
+      })
+      || take(new RegExp(`\\s(오늘|내일모레|내일|모레|글피)${DATE_P}(?=\\s)`), (m) =>
+        set(addDays(todayIso, { 오늘: 0, 내일: 1, 내일모레: 2, 모레: 2, 글피: 3 }[m[1]])))
+      || take(new RegExp(`\\s(\\d{1,3})\\s?(일|주일|주|개월|달)\\s?(?:후|뒤)${DATE_P}(?=\\s)`), (m) => {
+        const n = +m[1];
+        if (m[2] === '일') return set(addDays(todayIso, n));
+        if (m[2] === '주' || m[2] === '주일') return set(addDays(todayIso, n * 7));
+        return set(addMonths(todayIso, n));
+      })
+      || take(new RegExp(`\\s일주일\\s?(?:후|뒤)${DATE_P}(?=\\s)`), () => set(addDays(todayIso, 7)))
+      || take(new RegExp(`\\s(이번|다음)\\s?주말${DATE_P}(?=\\s)`), (m) => {
+        const sat = addDays(thisWeekMon, 5 + (m[1] === '다음' ? 7 : 0));
+        // 이미 일요일이면 오늘을 기준으로 한다
+        return set(m[1] === '이번' && diffDays(sat, todayIso) < 0 ? todayIso : sat);
+      })
+      || take(new RegExp(`\\s(이번|다음)\\s?주${DATE_P}(?=\\s)`), (m) => {
+        if (m[1] === '다음') return set(addDays(thisWeekMon, 7));
+        const fri = addDays(thisWeekMon, 4);
+        return set(diffDays(fri, todayIso) < 0 ? todayIso : fri);
+      })
+      || take(new RegExp(`\\s(?:이번\\s?달\\s?말|월말)${DATE_P}(?=\\s)`), () => set(endOfMonth(todayIso)))
+      || take(new RegExp(`\\s(\\d{1,2})일${DATE_P}(?=\\s)`), (m) => set(dayOnly(m[1], base)));
+    return found;
+  };
+
+  const setRange = (from, to) => {
+    if (!from) return false;
+    out.due = from;
+    if (to && to > from) out.endDate = to;
+    return true;
+  };
+
+  // 줄여 쓴 기간: "20~22일", "11월 20일~22일", "11월 28일 ~ 12월 2일", "12/20~12/22"
+  const shortRange = take(
+    new RegExp(`\\s(?:(\\d{1,2})월\\s?)?(\\d{1,2})일?\\s?${RANGE}\\s?(?:(\\d{1,2})월\\s?)?(\\d{1,2})일${DATE_P}(?=\\s)`),
+    (m) => {
+      const from = m[1] ? monthDay(m[1], m[2], todayIso) : dayOnly(m[2], todayIso);
+      const to = from && (m[3] ? monthDay(m[3], m[4], from) : dayOnly(m[4], from));
+      return setRange(from, to);
+    },
+  ) || take(
+    new RegExp(`\\s(\\d{1,2})/(\\d{1,2})\\s?${RANGE}\\s?(?:(\\d{1,2})/)?(\\d{1,2})${DATE_P}(?=\\s)`),
+    (m) => {
+      const from = monthDay(m[1], m[2], todayIso);
+      const to = from && (m[3] ? monthDay(m[3], m[4], from) : dayOnly(m[4], from));
+      return setRange(from, to);
+    },
+  );
+
+  if (!shortRange) {
+    const from = takeDate();
+    if (from) {
+      out.due = from;
+      // "3일간", "3일 동안", "2박 3일", "일주일간" (날짜로 오해하지 않도록 먼저 찾는다)
+      take(/\s(\d{1,2})박\s?(\d{1,2})일(?:간|\s?동안)?(?=\s)/, (m) => {
+        if (+m[1] < 1) return false;
+        out.endDate = addDays(from, +m[1]);
+        return true;
+      })
+        || take(/\s(\d{1,2})일\s?(?:간|동안)(?=\s)/, (m) => {
+          if (+m[1] < 2) return false;
+          out.endDate = addDays(from, +m[1] - 1);
+          return true;
+        })
+        || take(/\s일주일\s?(?:간|동안)(?=\s)/, () => { out.endDate = addDays(from, 6); return true; });
+      // "A부터 B까지", "A ~ B": 두 번째 날짜는 시작일을 기준으로 해석한다
+      if (!out.endDate && /부터|에서|[~〜–—]|\s-\s/.test(raw)) {
+        const to = takeDate(from);
+        if (to && to > from) out.endDate = to;
       }
-      const todayIdx = diffDays(todayIso, thisWeekMon);
-      return setDue(addDays(todayIso, (idx - todayIdx + 7) % 7));
-    })
-    || take(new RegExp(`\\s(오늘|내일모레|내일|모레|글피)${DATE_P}(?=\\s)`), (m) =>
-      setDue(addDays(todayIso, { 오늘: 0, 내일: 1, 내일모레: 2, 모레: 2, 글피: 3 }[m[1]])))
-    || take(new RegExp(`\\s(\\d{1,3})\\s?(일|주일|주|개월|달)\\s?(?:후|뒤)${DATE_P}(?=\\s)`), (m) => {
-      const n = +m[1];
-      if (m[2] === '일') return setDue(addDays(todayIso, n));
-      if (m[2] === '주' || m[2] === '주일') return setDue(addDays(todayIso, n * 7));
-      return setDue(addMonths(todayIso, n));
-    })
-    || take(new RegExp(`\\s일주일\\s?(?:후|뒤)${DATE_P}(?=\\s)`), () => setDue(addDays(todayIso, 7)))
-    || take(new RegExp(`\\s(이번|다음)\\s?주말${DATE_P}(?=\\s)`), (m) => {
-      const sat = addDays(thisWeekMon, 5 + (m[1] === '다음' ? 7 : 0));
-      // 이미 일요일이면 오늘을 기준으로 한다
-      return setDue(m[1] === '이번' && diffDays(sat, todayIso) < 0 ? todayIso : sat);
-    })
-    || take(new RegExp(`\\s(이번|다음)\\s?주${DATE_P}(?=\\s)`), (m) => {
-      if (m[1] === '다음') return setDue(addDays(thisWeekMon, 7));
-      const fri = addDays(thisWeekMon, 4);
-      return setDue(diffDays(fri, todayIso) < 0 ? todayIso : fri);
-    })
-    || take(new RegExp(`\\s(?:이번\\s?달\\s?말|월말)${DATE_P}(?=\\s)`), () => setDue(endOfMonth(todayIso)))
-    || take(new RegExp(`\\s(\\d{1,2})일${DATE_P}(?=\\s)`), (m) => {
-      let iso = validDate(year, now.getMonth() + 1, +m[1]);
-      if (iso && diffDays(iso, todayIso) < 0) {
-        const next = addMonths(`${todayIso.slice(0, 8)}01`, 1);
-        iso = validDate(+next.slice(0, 4), +next.slice(5, 7), +m[1]);
-      }
-      return setDue(iso);
-    });
+    }
+  }
 
   // 시간만 있으면 오늘(이미 지난 시각이면 내일), 반복만 있으면 오늘부터
   if (!out.due && out.time) {
@@ -132,6 +187,6 @@ export function parseQuickInput(raw, now = new Date()) {
   }
   if (!out.due && out.repeat) out.due = todayIso;
 
-  out.title = s.text.replace(/\s+/g, ' ').trim().replace(/^[,.\-·:]+\s*|\s*[,\-·:]+$/g, '').trim();
+  out.title = s.text.replace(/\s[~〜–—-]+(?=\s)/g, ' ').replace(/\s+/g, ' ').trim().replace(/^[,.\-·:]+\s*|\s*[,\-·:]+$/g, '').trim();
   return out;
 }

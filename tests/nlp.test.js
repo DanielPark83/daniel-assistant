@@ -8,7 +8,7 @@ const p = (text) => parseQuickInput(text, NOW);
 
 test('날짜·시간·중요도·태그를 한 번에 해석한다', () => {
   assert.deepEqual(p('내일 오후 3시 분기 보고서 제출 !중요 #업무'), {
-    title: '분기 보고서 제출', due: '2026-11-14', time: '15:00', priority: 'high', tags: ['업무'], repeat: null,
+    title: '분기 보고서 제출', due: '2026-11-14', endDate: null, time: '15:00', priority: 'high', tags: ['업무'], repeat: null,
   });
 });
 
@@ -72,7 +72,7 @@ test('반복', () => {
 
 test('해석할 것이 없으면 원문이 제목', () => {
   assert.deepEqual(p('  우유 사기  '), {
-    title: '우유 사기', due: null, time: null, priority: 'medium', tags: [], repeat: null,
+    title: '우유 사기', due: null, endDate: null, time: null, priority: 'medium', tags: [], repeat: null,
   });
   assert.equal(p('2일간 출장 준비').due, null);
   assert.equal(p('오늘의 할 일 정리').title, '오늘의 할 일 정리');
@@ -81,4 +81,42 @@ test('해석할 것이 없으면 원문이 제목', () => {
 test('잘못된 날짜는 무시한다', () => {
   assert.equal(p('13월 40일 테스트').due, null);
   assert.equal(p('2/30 테스트').due, null);
+});
+
+// 기간(여러 날) 일정 — 기준: 2026-11-13(금)
+const range = (text) => { const r = p(text); return [r.due, r.endDate, r.title]; };
+
+test('기간: 줄여 쓴 표현', () => {
+  assert.deepEqual(range('11월 20일~22일 부산 출장'), ['2026-11-20', '2026-11-22', '부산 출장']);
+  assert.deepEqual(range('20~22일 워크숍'), ['2026-11-20', '2026-11-22', '워크숍']);
+  assert.deepEqual(range('20일-22일 워크숍'), ['2026-11-20', '2026-11-22', '워크숍']);
+  assert.deepEqual(range('11월 28일 ~ 12월 2일 휴가'), ['2026-11-28', '2026-12-02', '휴가']);
+  assert.deepEqual(range('12/30~1/2 연말 휴가'), ['2026-12-30', '2027-01-02', '연말 휴가']);
+  assert.deepEqual(range('28~3일 학회'), ['2026-11-28', '2026-12-03', '학회']); // 끝 날짜가 작으면 다음 달
+});
+
+test('기간: 부터 ~ 까지', () => {
+  assert.deepEqual(range('11월 20일부터 22일까지 출장'), ['2026-11-20', '2026-11-22', '출장']);
+  assert.deepEqual(range('내일부터 모레까지 휴가'), ['2026-11-14', '2026-11-15', '휴가']);
+  assert.deepEqual(range('다음 주 월요일부터 수요일까지 교육'), ['2026-11-16', '2026-11-18', '교육']);
+  assert.deepEqual(range('월요일부터 금요일까지 야근'), ['2026-11-16', '2026-11-20', '야근']);
+  assert.deepEqual(range('내일 ~ 모레 가족 여행'), ['2026-11-14', '2026-11-15', '가족 여행']);
+  assert.deepEqual(range('12/24에서 12/26까지 여행'), ['2026-12-24', '2026-12-26', '여행']);
+});
+
+test('기간: 며칠간', () => {
+  assert.deepEqual(range('내일부터 3일간 출장'), ['2026-11-14', '2026-11-16', '출장']);
+  assert.deepEqual(range('20일부터 2박 3일 제주 여행'), ['2026-11-20', '2026-11-22', '제주 여행']);
+  assert.deepEqual(range('다음 주 월요일부터 일주일간 휴가'), ['2026-11-16', '2026-11-22', '휴가']);
+});
+
+test('기간이 아닌 문장은 그대로', () => {
+  assert.deepEqual(range('내일부터 운동 시작'), ['2026-11-14', null, '운동 시작']);
+  assert.deepEqual(range('모레까지 견적서 회신'), ['2026-11-15', null, '견적서 회신']);
+  assert.deepEqual(range('내일 회사에서 회의'), ['2026-11-14', null, '회사에서 회의']);
+  assert.deepEqual(range('2일간 출장 준비'), [null, null, '2일간 출장 준비']); // 시작일이 없으면 기간으로 보지 않는다
+  assert.deepEqual(range('20일 오후 3시 회의'), ['2026-11-20', null, '회의']);
+  assert.equal(p('2026-11-20 건강검진').endDate, null);
+  // 끝이 시작보다 앞서면 기간으로 보지 않는다
+  assert.equal(p('11월 22일부터 11월 20일까지 테스트').endDate, null);
 });

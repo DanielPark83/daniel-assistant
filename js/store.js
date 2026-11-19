@@ -140,6 +140,8 @@ export function normalize(data) {
         date: e.date,
         time: timeOrNull(e.time),
         endTime: timeOrNull(e.endTime),
+        // 여러 날 일정의 마지막 날(하루짜리면 null)
+        endDate: isoOrNull(e.endDate) && e.endDate > e.date ? e.endDate : null,
         location: str(e.location),
         notes: str(e.notes),
         createdAt,
@@ -270,7 +272,7 @@ export function postponeTodo(id, toIso) {
 export function addEvent(fields) {
   const now = nowIso();
   const ev = {
-    id: uid(), title: '', date: today(), time: null, endTime: null, location: '', notes: '', createdAt: now,
+    id: uid(), title: '', date: today(), endDate: null, time: null, endTime: null, location: '', notes: '', createdAt: now,
     ...fields,
     updatedAt: now,
   };
@@ -488,8 +490,10 @@ export function todosDoneOn(s, iso) {
 
 // 일정을 조회용 형태로 맞춘다.
 export function allEvents(s) {
-  return s.events.map((e) => ({ ...e, endDate: e.date, allDay: !e.time }));
+  return s.events.map((e) => ({ ...e, endDate: e.endDate && e.endDate > e.date ? e.endDate : e.date, allDay: !e.time }));
 }
+
+export const isMultiDay = (e) => !!e.endDate && e.endDate > e.date;
 
 export function compareEvents(a, b) {
   if (a.date !== b.date) return a.date.localeCompare(b.date);
@@ -521,7 +525,8 @@ export function alerts(s, now = new Date()) {
   };
 
   eventsOn(s, t).forEach((e) => {
-    if (!e.time || e.time < hm) return;
+    // 여러 날 일정은 첫날의 시작 시각에만 알린다
+    if (!e.time || e.time < hm || e.date !== t) return;
     const mins = (Number(e.time.slice(0, 2)) * 60 + Number(e.time.slice(3))) - (now.getHours() * 60 + now.getMinutes());
     if (mins <= 60) push('event', 'warning', e, e.title, mins <= 0 ? '지금 시작' : `${mins}분 후 시작`);
   });

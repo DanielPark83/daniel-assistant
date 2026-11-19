@@ -23,8 +23,10 @@ export function unsupportedReason() {
 }
 
 export function isEnabledHere() {
-  const me = store.getState().devices[sync.deviceId()];
-  return !!(me && me.push) && 'Notification' in window && Notification.permission === 'granted';
+  const s = store.getState();
+  const me = s.devices[sync.deviceId()];
+  return !!(me && me.push) && (!s.vapid || me.vapidKey === s.vapid.publicKey)
+    && 'Notification' in window && Notification.permission === 'granted';
 }
 
 export function receivingDevices() {
@@ -35,8 +37,8 @@ export function receivingDevices() {
 
 async function registration() {
   if (!('serviceWorker' in navigator)) throw new Error('이 브라우저는 알림을 지원하지 않습니다.');
-  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('앱을 새로 고친 뒤 다시 시도해 주세요.')), 8000));
-  return Promise.race([navigator.serviceWorker.ready, timeout]);
+  return withTimeout(navigator.serviceWorker.ready, 8000,
+    () => new PushStepError('등록', '앱의 백그라운드 작업(서비스 워커)이 준비되지 않았습니다. 앱을 완전히 닫았다가 다시 열어 주세요.'));
 }
 
 async function generateVapid() {
@@ -63,35 +65,88 @@ async function subscribeWith(vapidKey) {
   return { endpoint: json.endpoint, keys: { p256dh: json.keys.p256dh, auth: json.keys.auth } };
 }
 
-// 사용자 탭에서 호출해야 한다(권한 요청 때문에).
-export async function enable() {
+// 단계마다 시간 제한을 둔다. 실패하면 어느 단계에서 왜 멈췄는지 알려 준다.
+export class PushStepError extends Error {
+  constructor(step, message, cause) {
+    super(message);
+    this.step = step;
+    this.detail = cause ? `${cause.name || 'Error'}: ${cause.message || cause}` : '';
+  }
+}
+
+function withTimeout(promise, ms, onTimeout) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => { timer = setTimeout(() => reject(onTimeout()), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+// 옛 Safari는 콜백 방식이라 둘 다 받는다
+function askPermission() {
+  return new Promise((resolve, reject) => {
+    try {
+      const r = Notification.requestPermission(resolve);
+      if (r && typeof r.then === 'function') r.then(resolve, reject);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// 사용자 탭에서 바로 호출해야 한다. 권한 요청과 구독은 네트워크를 기다리지 않고 곧바로 한다
+// (iPhone은 탭 직후에만 권한을 물을 수 있고, 기다리는 사이 탭의 효력이 사라질 수 있다).
+// onStep(이름): 진행 상황 표시용
+export async function enable(onStep = () => {}) {
   const reason = unsupportedReason();
   if (reason) throw new Error(reason);
   if (!sync.isConnected()) throw new Error('먼저 기기 간 동기화를 연결해 주세요. 아침 브리핑은 동기화된 데이터로 만들어집니다.');
 
-  const permission = await Notification.requestPermission();
-  if (permission !== 'granted') throw new Error('알림 권한이 허용되지 않았습니다. 기기 설정에서 이 앱의 알림을 허용해 주세요.');
+  // 1) 권한
+  onStep('알림 권한 확인 중…');
+  let permission = Notification.permission;
+  if (permission !== 'granted') {
+    try {
+      permission = await withTimeout(askPermission(), 60000,
+        () => new PushStepError('권한', '알림 권한 창이 1분 동안 응답하지 않았습니다.'));
+    } catch (err) {
+      throw err instanceof PushStepError ? err : new PushStepError('권한', '알림 권한을 요청하지 못했습니다.', err);
+    }
+  }
+  if (permission === 'denied') {
+    throw new PushStepError('권한', '알림이 차단되어 있습니다. 휴대폰 설정 → 알림에서 이 앱(개인 비서)의 알림을 허용한 뒤 다시 눌러 주세요.');
+  }
+  if (permission !== 'granted') throw new PushStepError('권한', '알림 권한을 허용하지 않았습니다. 다시 눌러 「허용」을 선택해 주세요.');
 
-  // 다른 기기가 이미 만든 알림 키가 있으면 그것을 써야 하므로 먼저 받아 온다.
-  if (!(await sync.syncNow()) && sync.getStatus().state === 'error') throw new Error(sync.getStatus().error);
+  // 2) 이 기기를 알림 서버에 등록
+  onStep('알림 등록 중…');
   let vapid = store.getState().vapid;
   if (!vapid) vapid = store.setVapid(await generateVapid());
+  let pushInfo;
+  try {
+    pushInfo = await withTimeout(subscribeWith(vapid.publicKey), 25000,
+      () => new PushStepError('등록', '휴대폰의 알림 서비스가 25초 동안 응답하지 않았습니다. 앱을 완전히 닫았다가 다시 열어 한 번 더 눌러 주세요.'));
+  } catch (err) {
+    if (err instanceof PushStepError) throw err;
+    throw new PushStepError('등록', '휴대폰의 알림 서비스에 등록하지 못했습니다.', err);
+  }
+  store.setDevice(sync.deviceId(), { label: sync.deviceLabel(), push: pushInfo, vapidKey: vapid.publicKey });
 
-  const push = await subscribeWith(vapid.publicKey);
-  store.setDevice(sync.deviceId(), { label: sync.deviceLabel(), push, vapidKey: vapid.publicKey });
-  await sync.syncNow();
-  await reconcile(); // 동시에 다른 기기가 먼저 키를 만들었다면 그 키로 다시 구독한다
-  if (sync.getStatus().state === 'error') throw new Error(sync.getStatus().error);
+  // 3) 동기화 저장소에 저장 (실패해도 이 기기에는 남아 있다가 다음 동기화 때 올라간다)
+  onStep('저장 중…');
+  const saved = await withTimeout(sync.syncNow(), 45000, () => new PushStepError('저장', 'timeout')).catch(() => false);
+  if (saved) await withTimeout(reconcile(), 30000, () => new Error('timeout')).catch(() => {});
+  return { saved: !!saved };
 }
 
 export async function disable() {
   try {
     const reg = await registration();
-    const sub = await reg.pushManager.getSubscription();
-    if (sub) await sub.unsubscribe();
-  } catch { /* 구독이 없으면 그대로 진행 */ }
+    const sub = await withTimeout(reg.pushManager.getSubscription(), 10000, () => new Error('timeout'));
+    if (sub) await withTimeout(sub.unsubscribe(), 10000, () => new Error('timeout'));
+  } catch { /* 구독이 없거나 응답이 없으면 그대로 진행 */ }
   store.setDevice(sync.deviceId(), { label: sync.deviceLabel(), push: null, vapidKey: null });
-  await sync.syncNow();
+  await withTimeout(sync.syncNow(), 45000, () => new Error('timeout')).catch(() => {});
 }
 
 // 동기화 뒤에 호출: 이 기기의 구독이 현재 알림 키·브라우저 구독과 맞는지 확인하고 고친다.

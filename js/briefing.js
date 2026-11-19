@@ -1,6 +1,6 @@
 // 매일 브리핑: 저장된 할 일·일정·메모에서 오늘의 요약을 만든다.
 
-import { toISODate, addDays, diffDays, formatLong, formatRelative, formatTime } from './dates.js';
+import { toISODate, addDays, diffDays, formatLong, formatShort, formatRelative, formatTime } from './dates.js';
 import {
   BRIEFING_TAG, overdueTodos, todosDueOn, todosDoneOn, eventsOn, eventsBetween, compareTodos,
 } from './store.js';
@@ -15,7 +15,13 @@ export function greeting(now = new Date()) {
   return '좋은 저녁입니다';
 }
 
-const eventLine = (e) => `${e.allDay || !e.time ? '종일' : formatTime(e.time)} ${e.title}${e.location ? ` · ${e.location}` : ''}`;
+// 일정 한 줄. day: 그 일정을 보여 주는 날(여러 날 일정은 첫날만 시작 시각을 쓴다)
+function eventLine(e, day = e.date) {
+  const multi = e.endDate && e.endDate > e.date;
+  const when = !e.time || (multi && day !== e.date) ? '종일' : formatTime(e.time);
+  const span = multi ? ` (${formatShort(e.date)}~${formatShort(e.endDate)})` : '';
+  return `${when} ${e.title}${span}${e.location ? ` · ${e.location}` : ''}`;
+}
 // 메모 한 줄 요약: 제목 — 본문 첫 줄(제목과 다를 때)
 function memoLine(m) {
   const title = m.title || '(제목 없음)';
@@ -65,7 +71,7 @@ export function buildBriefing(state, now = new Date()) {
   if (focus.length) {
     sections.push({ key: 'focus', title: '오늘의 핵심', items: focus.map((x) => (x.due < t ? `${todoLine(x)} — ${diffDays(t, x.due)}일 지연` : todoLine(x))) });
   }
-  sections.push({ key: 'events', title: '오늘 일정', items: todayEvents.map(eventLine), empty: '예정된 일정이 없습니다.' });
+  sections.push({ key: 'events', title: '오늘 일정', items: todayEvents.map((e) => eventLine(e, t)), empty: '예정된 일정이 없습니다.' });
   sections.push({ key: 'todos', title: '오늘 할 일', items: todayTodos.map(todoLine), empty: '오늘 마감인 할 일이 없습니다.' });
   if (overdue.length) {
     sections.push({
