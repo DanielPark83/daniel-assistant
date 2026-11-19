@@ -105,6 +105,8 @@ export function normalize(data) {
   const isoOrNull = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
   const timeOrNull = (v) => (typeof v === 'string' && /^\d{2}:\d{2}$/.test(v) ? v : null);
   const tags = (v) => (Array.isArray(v) ? v.filter((t) => typeof t === 'string' && t) : []);
+  // 알람: 몇 분 전(0 = 정시, 최대 1주일 전), 없으면 null
+  const remindOrNull = (v) => (Number.isInteger(v) && v >= 0 && v <= 10080 ? v : null);
   return {
     version: 1,
     settings: { ...base.settings, ...(isObj(data.settings) ? {
@@ -129,6 +131,7 @@ export function normalize(data) {
         updatedAt: stamp(t.updatedAt, createdAt),
         originalDue: isoOrNull(t.originalDue),
         postponed: Number.isInteger(t.postponed) ? t.postponed : 0,
+        remind: remindOrNull(t.remind),
       };
     }),
     events: arr(data.events).filter((e) => isoOrNull(e.date)).map((e) => {
@@ -142,6 +145,7 @@ export function normalize(data) {
         endTime: timeOrNull(e.endTime),
         // 여러 날 일정의 마지막 날(하루짜리면 null)
         endDate: isoOrNull(e.endDate) && e.endDate > e.date ? e.endDate : null,
+        remind: remindOrNull(e.remind),
         location: str(e.location),
         notes: str(e.notes),
         createdAt,
@@ -195,7 +199,7 @@ export function addTodo(fields) {
   const now = nowIso();
   const todo = {
     id: uid(), title: '', due: null, time: null, priority: 'medium', tags: [], notes: '', repeat: null,
-    done: false, doneAt: null, createdAt: now, originalDue: null, postponed: 0,
+    done: false, doneAt: null, createdAt: now, originalDue: null, postponed: 0, remind: null,
     ...fields,
     updatedAt: now,
   };
@@ -272,7 +276,7 @@ export function postponeTodo(id, toIso) {
 export function addEvent(fields) {
   const now = nowIso();
   const ev = {
-    id: uid(), title: '', date: today(), endDate: null, time: null, endTime: null, location: '', notes: '', createdAt: now,
+    id: uid(), title: '', date: today(), endDate: null, time: null, endTime: null, location: '', notes: '', remind: null, createdAt: now,
     ...fields,
     updatedAt: now,
   };

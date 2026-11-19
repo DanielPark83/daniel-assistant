@@ -18,6 +18,7 @@ const SHELL = [
   'js/push.js',
   'js/qr.js',
   'js/b64.js',
+  'js/reminders.js',
   'manifest.webmanifest',
   'icons/icon.svg',
   'icons/icon-192.png',

@@ -18,7 +18,7 @@ function validDate(y, m, d) {
 
 export function parseQuickInput(raw, now = new Date()) {
   const todayIso = toISODate(now);
-  const out = { title: '', due: null, endDate: null, time: null, priority: 'medium', tags: [], repeat: null };
+  const out = { title: '', due: null, endDate: null, time: null, priority: 'medium', tags: [], repeat: null, remind: null };
   const s = { text: ` ${String(raw || '').replace(/\s+/g, ' ').trim()} ` };
 
   // 매치된 구간을 공백으로 치환한다. handler가 false를 반환하면 소비하지 않는다.
@@ -48,6 +48,19 @@ export function parseQuickInput(raw, now = new Date()) {
   take(/\s(매일|매주|매월|매달)(?=\s)/, (m) => {
     out.repeat = { 매일: 'daily', 매주: 'weekly', 매월: 'monthly', 매달: 'monthly' }[m[1]];
   });
+
+  // 3-2) 알람 (시간보다 먼저: "1시간 전 알림"의 "1시"를 시각으로 읽지 않도록)
+  const ALARM = '(?:알림|알람)';
+  take(new RegExp(`\\s(\\d{1,3})\\s?(분|시간)\\s?전(?:에)?\\s?${ALARM}(?=\\s)`), (m) => {
+    out.remind = +m[1] * (m[2] === '시간' ? 60 : 1);
+    return out.remind <= 10080;
+  })
+    || take(new RegExp(`\\s${ALARM}\\s?(\\d{1,3})\\s?(분|시간)\\s?전(?=\\s)`), (m) => {
+      out.remind = +m[1] * (m[2] === '시간' ? 60 : 1);
+      return out.remind <= 10080;
+    })
+    || take(new RegExp(`\\s(?:하루|1일)\\s?전(?:에)?\\s?${ALARM}(?=\\s)`), () => { out.remind = 1440; })
+    || take(new RegExp(`\\s(?:정시|제시간)\\s?${ALARM}(?=\\s)`), () => { out.remind = 0; });
 
   // 4) 시간
   const setTime = (h, min, meridiem) => {

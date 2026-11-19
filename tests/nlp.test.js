@@ -8,7 +8,7 @@ const p = (text) => parseQuickInput(text, NOW);
 
 test('날짜·시간·중요도·태그를 한 번에 해석한다', () => {
   assert.deepEqual(p('내일 오후 3시 분기 보고서 제출 !중요 #업무'), {
-    title: '분기 보고서 제출', due: '2026-11-14', endDate: null, time: '15:00', priority: 'high', tags: ['업무'], repeat: null,
+    title: '분기 보고서 제출', due: '2026-11-14', endDate: null, time: '15:00', priority: 'high', tags: ['업무'], repeat: null, remind: null,
   });
 });
 
@@ -72,7 +72,7 @@ test('반복', () => {
 
 test('해석할 것이 없으면 원문이 제목', () => {
   assert.deepEqual(p('  우유 사기  '), {
-    title: '우유 사기', due: null, endDate: null, time: null, priority: 'medium', tags: [], repeat: null,
+    title: '우유 사기', due: null, endDate: null, time: null, priority: 'medium', tags: [], repeat: null, remind: null,
   });
   assert.equal(p('2일간 출장 준비').due, null);
   assert.equal(p('오늘의 할 일 정리').title, '오늘의 할 일 정리');
@@ -119,4 +119,14 @@ test('기간이 아닌 문장은 그대로', () => {
   assert.equal(p('2026-11-20 건강검진').endDate, null);
   // 끝이 시작보다 앞서면 기간으로 보지 않는다
   assert.equal(p('11월 22일부터 11월 20일까지 테스트').endDate, null);
+});
+
+test('알람', () => {
+  const r = (text) => { const x = p(text); return [x.title, x.due, x.time, x.remind]; };
+  assert.deepEqual(r('내일 오후 3시 회의 10분 전 알림'), ['회의', '2026-11-14', '15:00', 10]);
+  assert.deepEqual(r('모레 2시 치과 1시간 전 알람'), ['치과', '2026-11-15', '14:00', 60]);
+  assert.deepEqual(r('오후 4시 데모 알림 30분 전'), ['데모', '2026-11-13', '16:00', 30]);
+  assert.deepEqual(r('다음 주 월요일 보고서 제출 하루 전 알림'), ['보고서 제출', '2026-11-16', null, 1440]);
+  assert.deepEqual(r('오후 5시 퇴근 정시 알림'), ['퇴근', '2026-11-13', '17:00', 0]);
+  assert.deepEqual(r('알림 설정 확인'), ['알림 설정 확인', null, null, null]); // 단어만 있으면 알람이 아니다
 });

@@ -10,6 +10,7 @@ import { bytesToB64url, b64urlToBytes } from './b64.js';
 
 const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+export const isSamsungInternet = () => /SamsungBrowser/i.test(navigator.userAgent);
 const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 
 // 이 기기에서 알림을 켤 수 없으면 그 이유를, 켤 수 있으면 빈 문자열을 돌려준다.
@@ -106,15 +107,25 @@ export async function enable(onStep = () => {}) {
   onStep('알림 권한 확인 중…');
   let permission = Notification.permission;
   if (permission !== 'granted') {
+    // 삼성 인터넷으로 설치한 앱은 권한 창이 뜨지 않고 응답도 없는 경우가 있어 짧게 기다린다
+    const wait = isSamsungInternet() ? 12000 : 60000;
     try {
-      permission = await withTimeout(askPermission(), 60000,
-        () => new PushStepError('권한', '알림 권한 창이 1분 동안 응답하지 않았습니다.'));
+      permission = await withTimeout(askPermission(), wait,
+        () => new PushStepError('권한', isSamsungInternet()
+          ? '삼성 인터넷이 알림 권한 창을 띄우지 않았습니다. 아래 안내대로 설정에서 알림을 허용한 뒤 다시 눌러 주세요.'
+          : '알림 권한 창이 응답하지 않았습니다. 휴대폰 설정에서 이 앱의 알림을 허용한 뒤 다시 눌러 주세요.'));
     } catch (err) {
-      throw err instanceof PushStepError ? err : new PushStepError('권한', '알림 권한을 요청하지 못했습니다.', err);
+      if (!(err instanceof PushStepError)) err = new PushStepError('권한', '알림 권한을 요청하지 못했습니다.', err);
+      err.permission = Notification.permission;
+      err.howTo = isSamsungInternet() ? 'samsung' : 'generic';
+      throw err;
     }
   }
   if (permission === 'denied') {
-    throw new PushStepError('권한', '알림이 차단되어 있습니다. 휴대폰 설정 → 알림에서 이 앱(개인 비서)의 알림을 허용한 뒤 다시 눌러 주세요.');
+    const err = new PushStepError('권한', '알림이 차단되어 있습니다. 아래 안내대로 설정에서 알림을 허용한 뒤 다시 눌러 주세요.');
+    err.permission = 'denied';
+    err.howTo = isSamsungInternet() ? 'samsung' : 'generic';
+    throw err;
   }
   if (permission !== 'granted') throw new PushStepError('권한', '알림 권한을 허용하지 않았습니다. 다시 눌러 「허용」을 선택해 주세요.');
 

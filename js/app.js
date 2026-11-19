@@ -4,6 +4,7 @@ import * as store from './store.js';
 import * as sync from './sync.js';
 import * as push from './push.js';
 import { qrSvg, startScanner } from './qr.js';
+import { REMIND_OPTIONS, remindLabel, createLocalReminders } from './reminders.js';
 import { parseQuickInput } from './nlp.js';
 import { buildBriefing, greeting } from './briefing.js';
 import { parseMarkdownTasks, exportMarkdown } from './markdown.js';
@@ -120,6 +121,7 @@ function todoRow(todo, t, { postpone = false } = {}) {
     todo.priority === 'low' ? '<span class="chip">낮음</span>' : '',
     todo.repeat ? `<span class="chip">${icon('repeat')}${REPEAT_LABEL[todo.repeat]}</span>` : '',
     todo.postponed ? `<span class="chip">${todo.postponed}번 미룸</span>` : '',
+    todo.remind != null && !todo.done ? `<span class="chip">${icon('bell')}${esc(remindLabel(todo.remind))}</span>` : '',
     ...todo.tags.map((tag) => `<span class="chip chip-tag">#${esc(tag)}</span>`),
   ].join('');
   return `
@@ -150,6 +152,7 @@ function eventRow(ev, day = ev.date) {
     multi ? `${formatShort(ev.date)} ~ ${formatShort(ev.endDate)} (${diffDays(day, ev.date) + 1}/${diffDays(ev.endDate, ev.date) + 1}일)` : '',
     !multi && ev.endTime && ev.time ? `~ ${formatTime(ev.endTime)}` : '',
     ev.location ? ev.location : '',
+    ev.remind != null ? `알림 ${remindLabel(ev.remind)}` : '',
   ].filter(Boolean).join(' · ');
   return `
     <li class="row event">
@@ -202,6 +205,7 @@ function quickPreview(form) {
     const d = mode === 'todo' && p.endDate ? p.endDate : due;
     chips.push(`<span class="chip chip-accent">${icon('calendar')}${esc(`${formatRelative(d, t)}${p.time ? ` ${formatTime(p.time)}` : ''}`)}</span>`);
   }
+  if (p.remind != null && mode !== 'memo') chips.push(`<span class="chip">${icon('bell')}${esc(remindLabel(p.remind))}</span>`);
   if (mode === 'todo') {
     if (p.priority === 'high') chips.push(`<span class="chip chip-warning">${icon('flag')}중요</span>`);
     if (p.priority === 'low') chips.push('<span class="chip">낮음</span>');
@@ -223,18 +227,22 @@ function viewHome() {
   const overdue = store.overdueTodos(s, t);
   const alertList = store.alerts(s, now);
   const todayEvents = store.eventsOn(s, t);
-  const weekEvents = store.eventsBetween(s, t, addDays(t, 7));
+  const weekEnd = addDays(t, 6); // 오늘부터 7일
+  const weekEvents = store.eventsBetween(s, t, weekEnd);
+  const weekTodos = s.todos.filter((x) => !x.done && x.due && x.due >= t && x.due <= weekEnd).sort(store.compareTodos);
   const nowHM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
   const nextEvent = todayEvents.find((e) => e.time && e.date === t && e.time >= nowHM);
 
-  // 예정 일정: 오늘부터 7일, 날짜별로 묶는다
+  // 예정 할 일 및 일정: 오늘부터 7일, 날짜별로 묶는다(이미 시작한 여러 날 일정은 오늘에)
   const groups = new Map();
-  weekEvents.forEach((e) => {
-    const day = e.date < t ? t : e.date;
-    if (!groups.has(day)) groups.set(day, []);
-    groups.get(day).push(e);
-  });
-  const eventGroups = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(0, 5);
+  const groupOf = (day) => {
+    if (!groups.has(day)) groups.set(day, { events: [], todos: [] });
+    return groups.get(day);
+  };
+  weekEvents.forEach((e) => groupOf(e.date < t ? t : e.date).events.push(e));
+  weekTodos.forEach((x) => groupOf(x.due).todos.push(x));
+  const dayGroups = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const weekCount = weekEvents.length + weekTodos.length;
 
   const briefingCard = `
     <section class="card briefing-card ${s.briefingSeen === t ? '' : 'is-new'}">
@@ -309,12 +317,16 @@ function viewHome() {
 
     <section class="card">
       <div class="card-head">
-        <h2>예정 일정</h2>
-        <a class="card-link" href="#calendar">캘린더</a>
+        <h2>예정 할 일 및 일정</h2>
+        <span class="card-meta">오늘부터 7일 · ${weekCount}건</span>
       </div>
-      ${eventGroups.length ? eventGroups.map(([day, list]) => `
+      ${dayGroups.length ? dayGroups.map(([day, g]) => `
         <h3 class="group-title">${esc(formatRelative(day, t))}${diffDays(day, t) > 2 ? '' : ` · ${esc(formatShort(day))}`}</h3>
-        <ul class="list">${list.map((e) => eventRow(e, day)).join('')}</ul>`).join('') : empty('앞으로 7일간 예정된 일정이 없습니다.')}
+        <ul class="list">
+          ${g.events.map((e) => eventRow(e, day)).join('')}
+          ${g.todos.map((x) => todoRow(x, t)).join('')}
+        </ul>`).join('') : empty('앞으로 7일간 예정된 할 일과 일정이 없습니다.')}
+      <a class="card-link" href="#calendar">캘린더에서 보기</a>
     </section>
 
     ${s.briefingSeen === t ? briefingCard : ''}
@@ -620,6 +632,22 @@ const sheetHead = (title) => `
     <button class="icon-btn" type="button" data-action="close-sheet" aria-label="닫기">${icon('x')}</button>
   </div>`;
 
+// 알람 선택 칸. 시간이 없는 할 일·종일 일정은 그날 오전 9시를 기준으로 알린다.
+function remindFieldHtml(value) {
+  const v = value == null ? '' : String(value);
+  const perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  const note = perm === 'granted'
+    ? '앱이 켜져 있거나 백그라운드에 있을 때 이 기기 알림으로 울립니다.'
+    : '이 기기의 알림 권한이 꺼져 있어 앱 화면 안에서만 알려 드립니다. 설정 → 아침 브리핑 알림에서 알림을 켜 주세요.';
+  return `
+    <label class="field"><span>알람</span>
+      <select class="input" name="remind">
+        ${REMIND_OPTIONS.map(([m, label]) => `<option value="${m == null ? '' : m}" ${String(m == null ? '' : m) === v ? 'selected' : ''}>${label}</option>`).join('')}
+      </select>
+    </label>
+    <p class="hint">시간이 없으면 그날 오전 9시를 기준으로 합니다. ${note}</p>`;
+}
+
 function todoSheet(todo) {
   const t = todo || { title: '', due: '', time: '', priority: 'medium', tags: [], notes: '', repeat: '' };
   const history = todo && todo.postponed
@@ -639,6 +667,7 @@ function todoSheet(todo) {
             <label class="seg-btn"><input type="radio" name="priority" value="${p}" ${t.priority === p ? 'checked' : ''}><span>${PRIORITY_LABEL[p]}</span></label>`).join('')}
         </div>
       </fieldset>
+      ${remindFieldHtml(t.remind)}
       <label class="field"><span>반복</span>
         <select class="input" name="repeat">
           <option value="">반복 없음</option>
@@ -672,6 +701,7 @@ function eventSheet(ev, date) {
         <label class="field"><span>종료 시간</span><input class="input" name="endTime" type="time" value="${esc(e.endTime || '')}"></label>
       </div>
       <p class="hint">시간을 비우면 종일 일정입니다. 여러 날 일정의 종료 시간은 마지막 날의 시각입니다.</p>
+      ${remindFieldHtml(e.remind)}
       <label class="field"><span>장소</span><input class="input" name="location" value="${esc(e.location)}"></label>
       <label class="field"><span>메모</span><textarea class="input" name="notes" rows="3">${esc(e.notes)}</textarea></label>
       <div class="form-actions">
@@ -841,8 +871,36 @@ function pushPanelHtml() {
       <button class="btn" type="button" data-action="push-test">지금 브리핑 알림 보기</button>
     </div>
     ${needsRedo ? '<p class="hint">다른 기기와 알림 키가 바뀌어 이 기기는 다시 켜야 합니다.</p>' : ''}
-    ${err ? `<div class="sync-status is-error">${icon('alert')}<span>${esc(err.message)}${err.step ? `<br><small>멈춘 단계: ${esc(err.step)}${err.detail ? ` · ${esc(err.detail)}` : ''}</small>` : ''}</span></div>` : ''}
+    ${err ? `<div class="sync-status is-error">${icon('alert')}<span>${esc(err.message)}${err.step ? `<br><small>멈춘 단계: ${esc(err.step)}${err.permission ? ` · 권한 상태: ${esc(err.permission)}` : ''}${err.detail ? ` · ${esc(err.detail)}` : ''}</small>` : ''}</span></div>` : ''}
+    ${err && err.howTo ? permissionHelpHtml(err.howTo) : ''}
     ${list}`;
+}
+
+// 권한 창이 뜨지 않을 때 직접 허용하는 방법
+function permissionHelpHtml(kind) {
+  const host = esc(location.host);
+  if (kind === 'samsung') {
+    return `
+      <div class="help">
+        <b>삼성 인터넷에서 알림 허용하기</b>
+        <ol>
+          <li>휴대폰 <b>설정 → 애플리케이션 → 삼성 인터넷 → 알림</b>에서 <b>알림 허용</b>을 켭니다.</li>
+          <li><b>삼성 인터넷</b> 앱을 열고 아래쪽 <b>메뉴(≡) → 설정 → 사이트 및 다운로드 → 알림</b>으로 갑니다.
+            <b>알림 허용(사이트가 알림을 요청할 수 있음)</b>이 켜져 있는지 보고, 목록에 <b>${host}</b>가 있으면 <b>허용</b>으로 바꿉니다.</li>
+          <li>이 앱을 완전히 닫았다가 다시 열고 <b>이 기기에서 알림 받기</b>를 다시 누릅니다. 이번에는 권한 창이 뜨거나, 이미 허용되어 바로 켜집니다.</li>
+        </ol>
+        <p>메뉴 이름은 삼성 인터넷 버전에 따라 조금 다를 수 있습니다. 그래도 안 되면 <b>Chrome</b>으로 이 주소를 열어 홈 화면에 다시 설치하고, 설정에서 <b>QR 코드로 연결</b>하면 내용이 그대로 들어옵니다.</p>
+      </div>`;
+  }
+  return `
+    <div class="help">
+      <b>알림 직접 허용하기</b>
+      <ol>
+        <li>휴대폰 <b>설정 → 알림</b>(또는 <b>애플리케이션</b>)에서 이 앱이나 앱을 설치한 브라우저의 알림을 허용합니다.</li>
+        <li>브라우저의 사이트 설정에서 <b>${host}</b>의 알림을 <b>허용</b>으로 바꿉니다.</li>
+        <li>이 앱을 완전히 닫았다가 다시 열고 <b>이 기기에서 알림 받기</b>를 다시 누릅니다.</li>
+      </ol>
+    </div>`;
 }
 
 function refreshPanels() {
@@ -1103,7 +1161,7 @@ const ACTIONS = {
         ? '이 기기에서 매일 아침 브리핑 알림을 받습니다.'
         : '알림은 켰지만 아직 저장하지 못했습니다. 인터넷이 연결되면 자동으로 저장됩니다.');
     } catch (err) {
-      ui.pushError = { step: err.step || '', message: err.message, detail: err.detail || '' };
+      ui.pushError = { step: err.step || '', message: err.message, detail: err.detail || '', howTo: err.howTo || '', permission: err.permission || '' };
       toast(err.message);
     } finally {
       ui.pushBusy = false;
@@ -1155,7 +1213,7 @@ const FORMS = {
       if (!p.title) { input.value = text; toast('제목이 될 내용을 함께 적어 주세요.'); return; }
       if (mode === 'event') {
         const date = p.due || t;
-        store.addEvent({ title: p.title, date, endDate: p.endDate, time: p.time });
+        store.addEvent({ title: p.title, date, endDate: p.endDate, time: p.time, remind: p.remind });
         toast(`일정을 추가했습니다 · ${p.endDate ? `${formatShort(date)} ~ ${formatShort(p.endDate)}` : formatRelative(date, t)}${p.time ? ` ${formatTime(p.time)}` : ''}`);
       } else {
         // 할 일에 기간을 쓰면 마지막 날을 마감으로 본다
@@ -1180,10 +1238,12 @@ const FORMS = {
       time: f.time.value || null,
       priority: f.priority.value || 'medium',
       repeat: f.repeat.value || null,
+      remind: f.remind.value === '' ? null : Number(f.remind.value),
       tags: parseTags(f.tags.value),
       notes: f.notes.value.trim(),
     };
     if (fields.time && !fields.due) fields.due = today();
+    if (fields.remind != null && !fields.due) fields.due = today();
     if (fields.repeat && !fields.due) fields.due = today();
     if (form.dataset.id) store.updateTodo(form.dataset.id, fields);
     else store.addTodo(fields);
@@ -1202,6 +1262,7 @@ const FORMS = {
       endDate,
       time: f.time.value || null,
       endTime: f.time.value ? (f.endTime.value || null) : null,
+      remind: f.remind.value === '' ? null : Number(f.remind.value),
       location: f.location.value.trim(),
       notes: f.notes.value.trim(),
     };
@@ -1338,6 +1399,27 @@ document.addEventListener('focusout', () => {
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshIfIdle(); });
 setInterval(() => { if (!document.hidden && ui.tab === 'home') refreshIfIdle(); }, 60000);
 
+// ───────── 알람 ─────────
+// 앱이 켜져 있는(또는 백그라운드에 있는) 동안 할 일·일정 알람을 울린다.
+
+async function showReminder(r, { late }) {
+  const body = late ? `${r.body} (지난 알림)` : r.body;
+  let shown = false;
+  if ('Notification' in window && Notification.permission === 'granted' && 'serviceWorker' in navigator) {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(r.title, { body, tag: r.key, icon: 'icons/icon-192.png', badge: 'icons/badge-96.png', data: { url: r.url } });
+      shown = true;
+    } catch { /* 앱 안에서라도 알린다 */ }
+  }
+  if (!document.hidden || !shown) {
+    toast(`${r.title} — ${body}`);
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  }
+}
+
+let checkReminders = () => {};
+
 // ───────── 앱 업데이트 ─────────
 // 새 버전이 배포되면 열려 있는 앱도 바로 새 버전으로 바꾼다.
 // 입력 중이거나 설정·편집 창이 열려 있으면 끝날 때까지 기다렸다가 새로 고친다.
@@ -1391,12 +1473,18 @@ sync.init(localStore);
 store.subscribe((_, meta) => {
   if (meta.remote) refreshIfIdle(); else render();
   refreshPanels();
+  checkReminders();
 });
 sync.onStatus(() => { refreshPanels(); renderSyncIndicator(); });
 
 route();
 renderSyncIndicator();
 sync.start();
+
+checkReminders = createLocalReminders({ storage: localStore || sessionStorage, getState: store.getState, notify: showReminder });
+checkReminders();
+setInterval(checkReminders, 30000); // 백그라운드에서 타이머가 늦어져도 다시 확인한다
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkReminders(); });
 
 // 새 버전으로 바뀐 직후라면 알려 준다
 try {
@@ -1407,7 +1495,15 @@ try {
   }
 } catch { /* 무시 */ }
 setTimeout(checkForUpdate, 1500);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  checkForUpdate();
+  // 휴대폰 설정에서 알림을 허용하고 돌아오면 안내를 지운다
+  if (ui.pushError && 'Notification' in window && Notification.permission === 'granted') {
+    ui.pushError = null;
+    refreshPanels();
+  }
+});
 setInterval(() => { if (!document.hidden) checkForUpdate(); }, 30 * 60 * 1000);
 if (sync.isConnected()) {
   // 첫 동기화가 끝나면 알림 구독 상태를 맞춘다
