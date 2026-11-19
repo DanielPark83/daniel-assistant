@@ -18,7 +18,7 @@ const APP_VERSION = new URL(import.meta.url).searchParams.get('v') || 'dev';
 
 const TABS = ['home', 'todos', 'calendar', 'memos', 'briefing'];
 const PRIORITY_LABEL = { high: '높음', medium: '보통', low: '낮음' };
-const REPEAT_LABEL = { daily: '매일', weekly: '매주', monthly: '매월' };
+const REPEAT_LABEL = { daily: '매일', weekly: '매주', monthly: '매월', yearly: '매년' };
 
 const view = document.getElementById('view');
 const sheet = document.getElementById('sheet');
@@ -152,11 +152,12 @@ function eventRow(ev, day = ev.date) {
     multi ? `${formatShort(ev.date)} ~ ${formatShort(ev.endDate)} (${diffDays(day, ev.date) + 1}/${diffDays(ev.endDate, ev.date) + 1}일)` : '',
     !multi && ev.endTime && ev.time ? `~ ${formatTime(ev.endTime)}` : '',
     ev.location ? ev.location : '',
+    ev.repeat ? `${REPEAT_LABEL[ev.repeat]} 반복` : '',
     ev.remind != null ? `알림 ${remindLabel(ev.remind)}` : '',
   ].filter(Boolean).join(' · ');
   return `
     <li class="row event">
-      <button class="row-body event-body" type="button" data-action="open-event" data-id="${esc(ev.id)}">
+      <button class="row-body event-body" type="button" data-action="open-event" data-id="${esc(ev.id)}" data-date="${esc(ev.date)}">
         <span class="event-time">${esc(time)}</span>
         <span class="event-text">
           <span class="row-title">${esc(ev.title)}</span>
@@ -206,6 +207,7 @@ function quickPreview(form) {
     chips.push(`<span class="chip chip-accent">${icon('calendar')}${esc(`${formatRelative(d, t)}${p.time ? ` ${formatTime(p.time)}` : ''}`)}</span>`);
   }
   if (p.remind != null && mode !== 'memo') chips.push(`<span class="chip">${icon('bell')}${esc(remindLabel(p.remind))}</span>`);
+  if (mode === 'event' && p.repeat) chips.push(`<span class="chip">${icon('repeat')}${REPEAT_LABEL[p.repeat]}</span>`);
   if (mode === 'todo') {
     if (p.priority === 'high') chips.push(`<span class="chip chip-warning">${icon('flag')}중요</span>`);
     if (p.priority === 'low') chips.push('<span class="chip">낮음</span>');
@@ -686,11 +688,14 @@ function todoSheet(todo) {
     </form>`);
 }
 
-function eventSheet(ev, date) {
-  const e = ev || { title: '', date: date || ui.calDay, endDate: '', time: '', endTime: '', location: '', notes: '' };
+// occurrence: 반복 일정에서 누른 회차의 날짜(그 날만 삭제할 때 쓴다)
+function eventSheet(ev, date, occurrence) {
+  const e = ev || { title: '', date: date || ui.calDay, endDate: '', time: '', endTime: '', location: '', notes: '', repeat: null, repeatUntil: null };
+  const series = ev && ev.repeat;
   openSheet(`
-    ${sheetHead(ev ? '일정 수정' : '새 일정')}
-    <form class="form" data-form="event" data-id="${esc(ev ? ev.id : '')}">
+    ${sheetHead(ev ? (series ? '반복 일정 수정' : '일정 수정') : '새 일정')}
+    <form class="form" data-form="event" data-id="${esc(ev ? ev.id : '')}" data-occurrence="${esc(series && occurrence ? occurrence : '')}">
+      ${series ? `<p class="hint">반복 일정은 고치면 모든 회차에 함께 적용됩니다. 첫 일정: ${esc(formatShort(e.date))}${occurrence && occurrence !== e.date ? ` · 지금 연 날짜: ${esc(formatShort(occurrence))}` : ''}</p>` : ''}
       <label class="field"><span>제목</span><input class="input" name="title" required value="${esc(e.title)}"></label>
       <div class="field-row">
         <label class="field"><span>시작일</span><input class="input" name="date" type="date" required value="${esc(e.date)}"></label>
@@ -702,10 +707,23 @@ function eventSheet(ev, date) {
       </div>
       <p class="hint">시간을 비우면 종일 일정입니다. 여러 날 일정의 종료 시간은 마지막 날의 시각입니다.</p>
       ${remindFieldHtml(e.remind)}
+      <div class="field-row">
+        <label class="field"><span>반복</span>
+          <select class="input" name="repeat">
+            <option value="">반복 없음</option>
+            ${Object.entries(REPEAT_LABEL).map(([k, label]) => `<option value="${k}" ${e.repeat === k ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+        </label>
+        <label class="field"><span>반복 끝 <small>(비우면 계속)</small></span>
+          <input class="input" name="repeatUntil" type="date" value="${esc(e.repeatUntil || '')}" min="${esc(e.date)}">
+        </label>
+      </div>
+      <p class="hint">매월 31일처럼 그달에 없는 날짜는 건너뜁니다.${e.exdates && e.exdates.length ? ` 건너뛴 날짜 ${e.exdates.length}개` : ''}</p>
       <label class="field"><span>장소</span><input class="input" name="location" value="${esc(e.location)}"></label>
       <label class="field"><span>메모</span><textarea class="input" name="notes" rows="3">${esc(e.notes)}</textarea></label>
       <div class="form-actions">
-        ${ev ? '<button class="btn btn-danger" type="button" data-action="delete-event">삭제</button>' : ''}
+        ${ev ? `<button class="btn btn-danger" type="button" data-action="delete-event">${series ? '전체 삭제' : '삭제'}</button>` : ''}
+        ${series && occurrence ? '<button class="btn btn-danger" type="button" data-action="skip-occurrence">이 날만 삭제</button>' : ''}
         <span class="spacer"></span>
         <button class="btn" type="button" data-action="close-sheet">취소</button>
         <button class="btn btn-primary" type="submit">저장</button>
@@ -1079,12 +1097,23 @@ const ACTIONS = {
   'new-event': () => eventSheet(null, ui.calDay),
   'open-event': (el) => {
     const ev = store.getState().events.find((e) => e.id === el.dataset.id);
-    if (ev) eventSheet(ev);
+    if (ev) eventSheet(ev, null, el.dataset.date);
   },
   'delete-event': (el) => {
-    if (!confirm('이 일정을 삭제할까요?')) return;
+    const ev = store.getState().events.find((e) => e.id === el.closest('form').dataset.id);
+    if (!confirm(ev && ev.repeat ? '반복 일정 전체를 삭제할까요?' : '이 일정을 삭제할까요?')) return;
     store.deleteEvent(el.closest('form').dataset.id);
     closeSheet();
+  },
+  // 반복 일정에서 이 날짜만 빼기
+  'skip-occurrence': (el) => {
+    const form = el.closest('form');
+    const ev = store.getState().events.find((e) => e.id === form.dataset.id);
+    const day = form.dataset.occurrence;
+    if (!ev || !day || !confirm(`${formatLong(day)} 일정만 삭제할까요?`)) return;
+    store.updateEvent(ev.id, { exdates: [...(ev.exdates || []), day] });
+    closeSheet();
+    toast(`${formatShort(day)} 일정만 삭제했습니다.`);
   },
 
   'new-memo': () => memoSheet(null),
@@ -1213,8 +1242,8 @@ const FORMS = {
       if (!p.title) { input.value = text; toast('제목이 될 내용을 함께 적어 주세요.'); return; }
       if (mode === 'event') {
         const date = p.due || t;
-        store.addEvent({ title: p.title, date, endDate: p.endDate, time: p.time, remind: p.remind });
-        toast(`일정을 추가했습니다 · ${p.endDate ? `${formatShort(date)} ~ ${formatShort(p.endDate)}` : formatRelative(date, t)}${p.time ? ` ${formatTime(p.time)}` : ''}`);
+        store.addEvent({ title: p.title, date, endDate: p.endDate, time: p.time, remind: p.remind, repeat: p.repeat });
+        toast(`일정을 추가했습니다 · ${p.repeat ? `${REPEAT_LABEL[p.repeat]} 반복, 첫 일정 ` : ''}${p.endDate ? `${formatShort(date)} ~ ${formatShort(p.endDate)}` : formatRelative(date, t)}${p.time ? ` ${formatTime(p.time)}` : ''}`);
       } else {
         // 할 일에 기간을 쓰면 마지막 날을 마감으로 본다
         const { endDate, ...todo } = p;
@@ -1263,13 +1292,17 @@ const FORMS = {
       time: f.time.value || null,
       endTime: f.time.value ? (f.endTime.value || null) : null,
       remind: f.remind.value === '' ? null : Number(f.remind.value),
+      repeat: f.repeat.value || null,
+      repeatUntil: f.repeat.value && f.repeatUntil.value ? f.repeatUntil.value : null,
       location: f.location.value.trim(),
       notes: f.notes.value.trim(),
     };
     if (form.dataset.id) store.updateEvent(form.dataset.id, fields);
     else store.addEvent(fields);
-    ui.calDay = fields.date;
-    ui.calMonth = fields.date.slice(0, 7);
+    // 반복 일정의 한 회차에서 고쳤으면 보던 날짜에 머문다
+    const stay = form.dataset.occurrence && fields.repeat ? form.dataset.occurrence : null;
+    ui.calDay = stay || fields.date;
+    ui.calMonth = ui.calDay.slice(0, 7);
     closeSheet();
     render();
   },
@@ -1341,6 +1374,11 @@ document.addEventListener('change', (e) => {
     const end = e.target.form.elements.endDate;
     end.min = e.target.value;
     if (end.value && end.value < e.target.value) end.value = '';
+    const until = e.target.form.elements.repeatUntil;
+    if (until) {
+      until.min = e.target.value;
+      if (until.value && until.value < e.target.value) until.value = '';
+    }
   }
 });
 

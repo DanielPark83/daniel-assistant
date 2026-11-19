@@ -2,6 +2,7 @@
 // 알람 시각 계산은 순수 함수라 앱과 서버(나중에 붙일 발송기)가 함께 쓴다.
 
 import { fromISODate, diffDays, toISODate, formatShort, formatTime } from './dates.js';
+import { occurrences } from './store.js';
 
 // [분, 이름]. null = 알림 없음, 0 = 정시
 export const REMIND_OPTIONS = [
@@ -79,7 +80,13 @@ export function dueReminders(state, from, to) {
     });
   };
   state.todos.forEach((t) => add(t, 'todo'));
-  state.events.forEach((e) => add(e, 'event'));
+  // 일정은 회차마다(반복 일정 포함). 알람이 하루 이상 앞설 수 있으니 기간을 넉넉히 잡는다
+  state.events.forEach((e) => {
+    if (e.remind == null) return;
+    const lead = Math.ceil(e.remind / 1440) + 1;
+    const toDay = new Date(to.getTime() + lead * 86400000);
+    occurrences(e, toISODate(from), toISODate(toDay)).forEach((o) => add({ ...e, date: o.date, endDate: o.endDate }, 'event'));
+  });
   return out.sort((a, b) => a.at - b.at || a.title.localeCompare(b.title));
 }
 

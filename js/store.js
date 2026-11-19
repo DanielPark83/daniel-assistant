@@ -13,6 +13,7 @@ const PRIORITY_RANK = { high: 0, medium: 1, low: 2 };
 const EPOCH = '1970-01-01T00:00:00.000Z';
 const TOMBSTONE_DAYS = 180;
 const COLLECTIONS = ['todos', 'events', 'memos'];
+export const REPEATS = ['daily', 'weekly', 'monthly', 'yearly'];
 // 동기화 파일의 최상위 키 중 이 버전이 아는 것. 모르는 키는 그대로 보존한다.
 const KNOWN_KEYS = new Set(['format', 'version', 'settings', 'briefingSeen', 'extras', ...COLLECTIONS, 'deleted', 'devices', 'vapid']);
 
@@ -124,7 +125,7 @@ export function normalize(data) {
         priority: t.priority in PRIORITY_RANK ? t.priority : 'medium',
         tags: tags(t.tags),
         notes: str(t.notes),
-        repeat: ['daily', 'weekly', 'monthly'].includes(t.repeat) ? t.repeat : null,
+        repeat: REPEATS.includes(t.repeat) ? t.repeat : null,
         done: !!t.done,
         doneAt: str(t.doneAt) || null,
         createdAt,
@@ -146,6 +147,10 @@ export function normalize(data) {
         // 여러 날 일정의 마지막 날(하루짜리면 null)
         endDate: isoOrNull(e.endDate) && e.endDate > e.date ? e.endDate : null,
         remind: remindOrNull(e.remind),
+        // 반복: 매일·매주·매월·매년, 반복 끝나는 날(없으면 계속), 건너뛴 날짜들
+        repeat: REPEATS.includes(e.repeat) ? e.repeat : null,
+        repeatUntil: REPEATS.includes(e.repeat) && isoOrNull(e.repeatUntil) && e.repeatUntil >= e.date ? e.repeatUntil : null,
+        exdates: REPEATS.includes(e.repeat) && Array.isArray(e.exdates) ? [...new Set(e.exdates.filter((d) => isoOrNull(d)))].sort() : [],
         location: str(e.location),
         notes: str(e.notes),
         createdAt,
@@ -232,8 +237,9 @@ function nextDue(due, repeat, todayIso) {
     while (diffDays(next, todayIso) <= 0) next = addDays(next, 7);
     return next;
   }
-  let next = addMonths(due || todayIso, 1);
-  while (diffDays(next, todayIso) <= 0) next = addMonths(next, 1);
+  const months = repeat === 'yearly' ? 12 : 1;
+  let next = addMonths(due || todayIso, months);
+  while (diffDays(next, todayIso) <= 0) next = addMonths(next, months);
   return next;
 }
 
@@ -276,7 +282,8 @@ export function postponeTodo(id, toIso) {
 export function addEvent(fields) {
   const now = nowIso();
   const ev = {
-    id: uid(), title: '', date: today(), endDate: null, time: null, endTime: null, location: '', notes: '', remind: null, createdAt: now,
+    id: uid(), title: '', date: today(), endDate: null, time: null, endTime: null, location: '', notes: '', remind: null,
+    repeat: null, repeatUntil: null, exdates: [], createdAt: now,
     ...fields,
     updatedAt: now,
   };
@@ -492,27 +499,68 @@ export function todosDoneOn(s, iso) {
   return s.todos.filter((t) => t.done && t.doneAt && toISODate(new Date(t.doneAt)) === iso);
 }
 
-// 일정을 조회용 형태로 맞춘다.
-export function allEvents(s) {
-  return s.events.map((e) => ({ ...e, endDate: e.endDate && e.endDate > e.date ? e.endDate : e.date, allDay: !e.time }));
+export const isMultiDay = (e) => !!e.endDate && e.endDate > e.date;
+
+// iso에서 n달 뒤의 같은 날짜. 그달에 그 날짜가 없으면(31일, 2월 29일) null
+function sameDayMonthsLater(iso, n) {
+  const y = Number(iso.slice(0, 4));
+  const m = Number(iso.slice(5, 7)) - 1 + n;
+  const d = Number(iso.slice(8, 10));
+  const ty = y + Math.floor(m / 12);
+  const tm = ((m % 12) + 12) % 12;
+  if (d > new Date(ty, tm + 1, 0).getDate()) return null;
+  return toISODate(new Date(ty, tm, d));
 }
 
-export const isMultiDay = (e) => !!e.endDate && e.endDate > e.date;
+function nthStart(e, n) {
+  if (e.repeat === 'daily') return addDays(e.date, n);
+  if (e.repeat === 'weekly') return addDays(e.date, 7 * n);
+  return sameDayMonthsLater(e.date, (e.repeat === 'yearly' ? 12 : 1) * n);
+}
+
+// 일정이 from~to 기간에 걸치는 회차들 [{ date, endDate }]. 반복이 없으면 많아야 하나.
+export function occurrences(e, from, to) {
+  const span = isMultiDay(e) ? diffDays(e.endDate, e.date) : 0;
+  if (!e.repeat) {
+    const end = addDays(e.date, span);
+    return e.date <= to && end >= from ? [{ date: e.date, endDate: end }] : [];
+  }
+  const out = [];
+  const exdates = new Set(e.exdates || []);
+  // 기간 직전 회차부터 살펴본다
+  const earliest = addDays(from, -span);
+  let n = 0;
+  if (earliest > e.date) {
+    const gap = diffDays(earliest, e.date);
+    const months = (Number(earliest.slice(0, 4)) - Number(e.date.slice(0, 4))) * 12 + Number(earliest.slice(5, 7)) - Number(e.date.slice(5, 7));
+    n = Math.max(0, {
+      daily: gap, weekly: Math.floor(gap / 7), monthly: months - 1, yearly: Math.floor(months / 12) - 1,
+    }[e.repeat]);
+  }
+  for (let guard = 0; guard < 2000; guard += 1, n += 1) {
+    const start = nthStart(e, n);
+    if (start === null) continue; // 그달에 없는 날짜는 건너뛴다
+    if (start > to || (e.repeatUntil && start > e.repeatUntil)) break;
+    const end = addDays(start, span);
+    if (end >= from && !exdates.has(start)) out.push({ date: start, endDate: end });
+  }
+  return out;
+}
 
 export function compareEvents(a, b) {
   if (a.date !== b.date) return a.date.localeCompare(b.date);
   return (a.time || '').localeCompare(b.time || '');
 }
 
-export function eventsOn(s, iso) {
-  return allEvents(s)
-    .filter((e) => e.date <= iso && iso <= e.endDate)
-    .sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+// from 이상 to 이하에 걸치는 일정(반복 일정은 회차마다 하나씩). seriesDate는 반복의 첫 날짜.
+export function eventsBetween(s, from, to) {
+  return s.events
+    .flatMap((e) => occurrences(e, from, to).map((o) => ({ ...e, date: o.date, endDate: o.endDate, seriesDate: e.date, allDay: !e.time })))
+    .sort(compareEvents);
 }
 
-// from 이상 to 이하에 걸치는 일정
-export function eventsBetween(s, from, to) {
-  return allEvents(s).filter((e) => e.endDate >= from && e.date <= to).sort(compareEvents);
+export function eventsOn(s, iso) {
+  return eventsBetween(s, iso, iso).sort((a, b) => (a.time || '').localeCompare(b.time || ''));
 }
 
 // 중요 알림: 지연된 할 일, 오늘·내일 마감인 높은 중요도, 여러 번 미룬 항목, 곧 시작하는 일정

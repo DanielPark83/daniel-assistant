@@ -4,7 +4,7 @@
 import { parseQuickInput } from './nlp.js';
 import { compareTodos } from './store.js';
 
-const REPEAT_TEXT = { daily: 'every day', weekly: 'every week', monthly: 'every month' };
+const REPEAT_TEXT = { daily: 'every day', weekly: 'every week', monthly: 'every month', yearly: 'every year' };
 
 export function parseMarkdownTasks(md, now = new Date()) {
   const todos = [];
@@ -20,9 +20,9 @@ export function parseMarkdownTasks(md, now = new Date()) {
     if (done) text = text.replace(done[0], ' ');
     const time = /⏰\s*(\d{2}:\d{2})/.exec(text);
     if (time) { fields.time = time[1]; text = text.replace(time[0], ' '); }
-    const rep = /🔁\s*every\s+(day|week|month)/i.exec(text);
+    const rep = /🔁\s*every\s+(day|week|month|year)/i.exec(text);
     if (rep) {
-      fields.repeat = { day: 'daily', week: 'weekly', month: 'monthly' }[rep[1].toLowerCase()];
+      fields.repeat = { day: 'daily', week: 'weekly', month: 'monthly', year: 'yearly' }[rep[1].toLowerCase()];
       text = text.replace(rep[0], ' ');
     }
     if (/[🔺⏫🔼]/u.test(text)) fields.priority = 'high';

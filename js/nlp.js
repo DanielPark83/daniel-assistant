@@ -45,8 +45,8 @@ export function parseQuickInput(raw, now = new Date()) {
     || take(/\s(낮음|나중에)(?=\s)/, setPriority('low'));
 
   // 3) 반복
-  take(/\s(매일|매주|매월|매달)(?=\s)/, (m) => {
-    out.repeat = { 매일: 'daily', 매주: 'weekly', 매월: 'monthly', 매달: 'monthly' }[m[1]];
+  take(/\s(매일|매주|매월|매달|매년|매해)(?=\s)/, (m) => {
+    out.repeat = { 매일: 'daily', 매주: 'weekly', 매월: 'monthly', 매달: 'monthly', 매년: 'yearly', 매해: 'yearly' }[m[1]];
   });
 
   // 3-2) 알람 (시간보다 먼저: "1시간 전 알림"의 "1시"를 시각으로 읽지 않도록)
